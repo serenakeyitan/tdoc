@@ -1,4 +1,4 @@
-# tdoc - google doc designed for agents
+# tdoc - google doc, but designed for agents
 this is tdoc, a doc for you to try: https://tdoc-serenatan.serenatan.workers.dev/d/conway-life/v/2
 
 > **Inspired by [bdocs](https://x.com/jessepollak/status/2054313757543964857) by [Jesse Pollak](https://x.com/jessepollak).** All credit to Jesse for the original idea, the "HTML is a powerful interface" framing, and the bdocs internal tool at Coinbase that showed what prompt-native docs can be. `tdoc` is an open-source community implementation of that vision — you should follow [@jessepollak](https://x.com/jessepollak) for the real thinking behind this.
