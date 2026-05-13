@@ -16,6 +16,24 @@
     document.head.appendChild(m);
   }
 
+  // Detect the doc's actual rendered background luminance. We previously gated
+  // dark-mode styles on `prefers-color-scheme: dark`, but that produced ugly
+  // dark-yellow highlights on docs that hardcode a white background while the
+  // user's OS is in dark mode. Instead, classify based on what's actually
+  // painted, then add `body.tdoc-doc-dark` if the page background is dark.
+  // CSS uses this class instead of @media to pick highlight colors.
+  function classifyDocTheme() {
+    const bg = getComputedStyle(document.body).backgroundColor || 'rgb(255,255,255)';
+    const m = bg.match(/\d+/g);
+    if (!m || m.length < 3) return;
+    const [r, g, b] = m.map(Number);
+    // Standard relative luminance approximation.
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    document.body.classList.toggle('tdoc-doc-dark', lum < 0.5);
+  }
+  // Run after CSS is parsed and the body has its computed background.
+  setTimeout(classifyDocTheme, 0);
+
   const css = `
   .tdoc-bar { position: fixed; top: 0; left: 0; right: 0; height: 44px; background: #0a0a0a; color: #fff;
     display: flex; align-items: center; padding: 0 16px; font: 13px system-ui, sans-serif; z-index: 999999; gap: 12px; }
@@ -374,20 +392,23 @@
     body.tdoc-narrow #tdoc-comment-layer { background: #0f0f0f; border-top-color: #2a2a2a;
       box-shadow: 0 -4px 24px rgba(0,0,0,0.6); }
     body.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { background: #444; }
-
-    /* Anchor highlight: a darker yellow still distinguishable from prose. */
-    .tdoc-anchor-mark { background: #5e4f00; color: inherit; }
-    .tdoc-anchor-mark:hover { background: #7a6700; }
-    .tdoc-anchor-mark.active,
-    .tdoc-anchor-mark .tdoc-anchor-mark.active { background: #8a7400; box-shadow: 0 -1.5px 0 0 #b89c00 inset; }
-    .tdoc-pending-highlight { background: #8a7400; box-shadow: 0 0 0 1px #b89c00 inset; }
-
-    /* Footer: low-opacity light text. */
-    .tdoc-footer { color: #777; border-top-color: #2a2a2a; }
-    .tdoc-footer a { color: #999; }
-    .tdoc-footer a:hover { color: #8ab0ff; }
-    .tdoc-footer .sep { color: #3a3a3a; }
   }
+
+  /* Anchor highlight + footer use the DOC's actual rendered background to
+     decide light vs dark — not the user's OS setting. This avoids the
+     muddy "dark yellow on white doc" problem when the OS is set to dark
+     mode but the doc itself has a hardcoded white background. */
+  body.tdoc-doc-dark .tdoc-anchor-mark { background: #5e4f00; color: inherit; }
+  body.tdoc-doc-dark .tdoc-anchor-mark:hover { background: #7a6700; }
+  body.tdoc-doc-dark .tdoc-anchor-mark.active,
+  body.tdoc-doc-dark .tdoc-anchor-mark .tdoc-anchor-mark.active {
+    background: #8a7400; box-shadow: 0 -1.5px 0 0 #b89c00 inset; }
+  body.tdoc-doc-dark .tdoc-pending-highlight { background: #8a7400; box-shadow: 0 0 0 1px #b89c00 inset; }
+
+  body.tdoc-doc-dark .tdoc-footer { color: #777; border-top-color: #2a2a2a; }
+  body.tdoc-doc-dark .tdoc-footer a { color: #999; }
+  body.tdoc-doc-dark .tdoc-footer a:hover { color: #8ab0ff; }
+  body.tdoc-doc-dark .tdoc-footer .sep { color: #3a3a3a; }
   `;
   const style = document.createElement('style');
   style.textContent = css;
