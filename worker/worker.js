@@ -178,26 +178,90 @@ export default {
     }
 
     // ---- doc export (fork) ----
+    // Returns a standalone HTML file with:
+    //   1. A leading agent-readable banner (HTML comment) listing every
+    //      comment + reply + reaction grouped by anchor.
+    //   2. A <script type="application/json" id="tdoc-fork-comments"> block
+    //      with the full comments JSON (so agents can parse it reliably).
+    //   3. Inline <!--TDOC-COMMENT id--> markers wrapped around each comment's
+    //      anchor text so agents can locate the right region for "apply this
+    //      comment" requests.
+    //   4. No Content-Disposition header — the URL opens in-tab, lets the
+    //      user save it themselves if desired. ?download=1 to force download.
     const exportMatch = p.match(/^\/d\/([^/]+)\/v\/(\d+)\/export\/?$/);
     if (exportMatch && method === 'GET') {
       const [, slug, vStr] = exportMatch;
       const obj = await env.DOCS.get(`docs/${slug}/v${vStr}/index.html`);
       if (!obj) return text(`Not found: ${slug} v${vStr}`, { status: 404 });
-      const raw = await obj.text();
-      const banner =
-`<!--
-  tdoc fork export — ${slug} v${vStr}
-  Save this file as ~/tdocs/<your-new-slug>/v1/index.html
-  Then run: /tdoc list
--->
+      let html = await obj.text();
+
+      const commentsRaw = await env.META.get(`comments:${slug}`);
+      const comments = commentsRaw ? JSON.parse(commentsRaw) : [];
+      const openComments = comments.filter(c => c.status !== 'resolved');
+
+      // 1. Build the agent-readable banner.
+      const reactionsText = (rs) => {
+        if (!rs) return '';
+        const parts = Object.entries(rs).filter(([, u]) => u && u.length > 0)
+          .map(([e, u]) => `${e} (${u.length})`);
+        return parts.length ? `    reactions: ${parts.join(', ')}\n` : '';
+      };
+      let banner = `<!--
+  ===== tdoc fork export =====
+  slug: ${slug}
+  version: ${vStr}
+  exported: ${new Date().toISOString()}
+
+  ## How to use this file
+  Save it as ~/tdocs/<your-new-slug>/v1/index.html (or anywhere you like).
+  Comments below are read-only metadata bundled with the fork. Agents can
+  read them to apply changes — say "apply all comments to this doc" and the
+  agent will find the anchored regions (marked with TDOC-COMMENT html
+  comments inline below) and modify them accordingly.
+
+  ## Comments included in this export
+  ${openComments.length} comment(s).
 `;
-      return new Response(banner + raw, {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Disposition': `attachment; filename="${slug}-v${vStr}.html"`,
-        },
-      });
+      for (let i = 0; i < openComments.length; i++) {
+        const c = openComments[i];
+        const who = c.author?.login ? `@${c.author.login}` : 'anonymous';
+        const anchor = c.anchor?.kind === 'element'
+          ? `(on ${c.anchor.label || c.anchor.selector || 'element'})`
+          : c.anchor?.text ? `(on text: "${c.anchor.text.replace(/"/g, '\\"').slice(0, 120)}")` : '(no anchor)';
+        banner += `\n  [${i + 1}] ${who} ${anchor}\n    "${c.text.replace(/\n/g, ' ')}"\n${reactionsText(c.reactions)}`;
+        if (Array.isArray(c.replies)) {
+          for (const r of c.replies) {
+            const rWho = r.author?.login ? `@${r.author.login}` : 'anonymous';
+            banner += `      ↳ ${rWho}: "${r.text.replace(/\n/g, ' ')}"\n${reactionsText(r.reactions).replace(/^/gm, '  ')}`;
+          }
+        }
+      }
+      banner += `\n  ===== end tdoc fork export =====\n-->\n`;
+
+      // 2. Embed structured JSON for programmatic parsing.
+      const jsonBlock = `<script type="application/json" id="tdoc-fork-comments">${
+        JSON.stringify({ slug, version: Number(vStr), exported: new Date().toISOString(), comments: openComments }, null, 2)
+          .replace(/<\/script>/gi, '<\\/script>')
+      }</script>\n`;
+
+      // 3. Inline TDOC-COMMENT markers around anchored text. Done with simple
+      //    text replacement; if the same text appears multiple times, we mark
+      //    only the first occurrence (matches the live anchor behavior).
+      for (const c of openComments) {
+        if (c.anchor?.kind !== 'text' && !c.anchor?.text) continue;
+        const needle = c.anchor.text;
+        if (!needle || needle.length < 2) continue;
+        const idx = html.indexOf(needle);
+        if (idx === -1) continue;
+        const replacement = `<!--TDOC-COMMENT id="${c.id}" by="${c.author?.login || 'anonymous'}"-->${needle}<!--/TDOC-COMMENT-->`;
+        html = html.slice(0, idx) + replacement + html.slice(idx + needle.length);
+      }
+
+      const finalHtml = banner + jsonBlock + html;
+      const forceDownload = url.searchParams.get('download') === '1';
+      const headers = { 'Content-Type': 'text/html; charset=utf-8' };
+      if (forceDownload) headers['Content-Disposition'] = `attachment; filename="${slug}-v${vStr}-fork.html"`;
+      return new Response(finalHtml, { status: 200, headers });
     }
 
     // ---- auth ----

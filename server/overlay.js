@@ -6,6 +6,16 @@
   let identity = cfg.identity || null;
   if (!slug) return;
 
+  // Ensure mobile devices render at actual device width. Without this,
+  // phones zoom out to a "desktop" virtual viewport (~980px), defeating any
+  // responsive design. We inject the viewport meta if the doc doesn't have one.
+  if (!document.querySelector('meta[name="viewport"]')) {
+    const m = document.createElement('meta');
+    m.name = 'viewport';
+    m.content = 'width=device-width, initial-scale=1, viewport-fit=cover';
+    document.head.appendChild(m);
+  }
+
   const css = `
   .tdoc-bar { position: fixed; top: 0; left: 0; right: 0; height: 44px; background: #0a0a0a; color: #fff;
     display: flex; align-items: center; padding: 0 16px; font: 13px system-ui, sans-serif; z-index: 999999; gap: 12px; }
@@ -335,7 +345,7 @@
         e.stopPropagation();
         secMenu.classList.remove('open');
         if (b.dataset.action === 'home') location.href = '/';
-        if (b.dataset.action === 'fork') location.href = `/d/${encodeURIComponent(slug)}/v/${version}/export`;
+        if (b.dataset.action === 'fork') window.open(`/d/${encodeURIComponent(slug)}/v/${version}/export`, '_blank');
       };
     });
     document.addEventListener('click', (e) => {
@@ -366,8 +376,9 @@
   if (isPublished) {
     const fb = document.getElementById('tdoc-fork-btn');
     if (fb) fb.onclick = () => {
-      // v1: download raw HTML export with import instructions
-      window.location.href = `/d/${encodeURIComponent(slug)}/v/${version}/export`;
+      // Open the forked doc (with comments embedded as agent-readable
+      // metadata) in a new tab. ?download=1 to force download instead.
+      window.open(`/d/${encodeURIComponent(slug)}/v/${version}/export`, '_blank');
     };
   }
 
@@ -967,17 +978,26 @@
   // the actual article width + the space needed by the margin column. This
   // beats a fixed CSS breakpoint because docs come in many widths.
   function evaluateNarrowMode() {
-    // Switch to drawer-mode when the article itself gets uncomfortably narrow,
-    // OR the viewport is phone-sized. Because we reserve 320px right-padding
-    // for the card column (see body.tdoc-has-comments rule), the article
-    // shrinks symmetrically only on the LEFT as the window shrinks — so the
-    // card column stays visible until the doc itself becomes unreadable.
-    const MIN_ARTICLE_WIDTH = 400;  // below this, prose feels cramped → drawer
+    // Switch to drawer-mode when:
+    //   - viewport is phone-sized (<700px), OR
+    //   - article would become uncomfortably narrow (<400px), OR
+    //   - the right column wouldn't fully fit a card (<300px).
+    // Because we reserve 320px right-padding when there are comments, the
+    // article shrinks LEFT-anchored as the window shrinks — keeping the card
+    // column visible until the doc itself becomes unreadable.
+    const MIN_ARTICLE_WIDTH = 400;
+    const MIN_COLUMN_WIDTH = 300;        // 280 card + 20 safe
     const isPhone = window.innerWidth < 700;
     const article = pickArticleElement();
     let articleWidth = Infinity;
-    if (article) articleWidth = article.getBoundingClientRect().width;
-    const narrow = isPhone || articleWidth < MIN_ARTICLE_WIDTH;
+    let articleRight = 0;
+    if (article) {
+      const r = article.getBoundingClientRect();
+      articleWidth = r.width;
+      articleRight = r.right;
+    }
+    const columnRoom = window.innerWidth - articleRight;
+    const narrow = isPhone || articleWidth < MIN_ARTICLE_WIDTH || columnRoom < MIN_COLUMN_WIDTH;
     document.body.classList.toggle('tdoc-narrow', narrow);
     fab.style.display = (narrow && activeComments.length > 0) ? 'inline-flex' : 'none';
     if (!narrow) commentLayer.classList.remove('open');
