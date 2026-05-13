@@ -298,7 +298,7 @@ Note: the container should **not** have `margin: 0 auto`. The overlay will set i
 
 ### Required: explicit body background
 
-Always set `body { background: #fff; }` (or whatever you want). The overlay reads the computed background to classify light vs dark mode for highlight colors. A doc without an explicit background falls back to transparent, which the overlay reads as light — fine for white pages, broken for any dark theme.
+Always set `body { background: #fff; }` (or your chosen color) so the page doesn't render as transparent over the browser default. Light mode only; the overlay does not currently support dark mode.
 
 ### Responsive defaults (REQUIRED)
 

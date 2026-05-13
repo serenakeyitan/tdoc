@@ -306,19 +306,6 @@
   if (HIGHLIGHT_API) {
     CSS.highlights.set('tdoc-pending', pendingHighlight);
   }
-  function setCommentHighlight(id, ranges, active) {
-    if (!HIGHLIGHT_API) return;
-    const name = `tdoc-anchor-${id}`;
-    CSS.highlights.delete(name);
-    if (!ranges || !ranges.length) return;
-    const h = new Highlight(...ranges);
-    h.priority = active ? 2 : 1;
-    CSS.highlights.set(name, h);
-    // Also register under the shared 'tdoc-anchor' / 'tdoc-anchor-active' so the
-    // single ::highlight() rule paints it. We use a per-id name only so we can
-    // independently delete.
-    rebuildSharedHighlights();
-  }
   function rebuildSharedHighlights() {
     if (!HIGHLIGHT_API) return;
     const idle = new Highlight();
@@ -333,9 +320,6 @@
   }
   function clearAllCommentHighlights() {
     if (!HIGHLIGHT_API) return;
-    for (const id of state.anchorMarks.keys()) {
-      CSS.highlights.delete(`tdoc-anchor-${id}`);
-    }
     CSS.highlights.delete('tdoc-anchor');
     CSS.highlights.delete('tdoc-anchor-active');
   }
@@ -448,16 +432,17 @@
     const pb = document.getElementById('tdoc-publish-btn');
     if (pb) pb.onclick = (e) => { e.stopPropagation(); showPublishModal(); };
   }
+  function triggerForkDownload(slug, version) {
+    const a = document.createElement('a');
+    a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
+    a.download = `${slug}-v${version}-fork.html`;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
   if (isFork) {
     // Save As: same download as Fork, but from within fork mode (no /fork open
     // since we ARE the fork tab already).
     const sa = document.getElementById('tdoc-saveas-btn');
-    if (sa) sa.onclick = () => {
-      const a = document.createElement('a');
-      a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
-      a.download = `${slug}-v${version}-fork.html`;
-      document.body.appendChild(a); a.click(); a.remove();
-    };
+    if (sa) sa.onclick = () => triggerForkDownload(slug, version);
   }
 
   const copyBtn = document.getElementById('tdoc-copy-md-btn');
@@ -482,12 +467,7 @@
       if (b.dataset.action === 'fork') forkAndDownload();
       if (b.dataset.action === 'share') showShareModal();
       if (b.dataset.action === 'publish') showPublishModal();
-      if (b.dataset.action === 'saveas') {
-        const a = document.createElement('a');
-        a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
-        a.download = `${slug}-v${version}-fork.html`;
-        document.body.appendChild(a); a.click(); a.remove();
-      }
+      if (b.dataset.action === 'saveas') triggerForkDownload(slug, version);
     };
   });
 
@@ -824,34 +804,37 @@
   }
 
   // ========== Card positioning + active state ==========
-  function pickArticleElement() {
+  // Single source of truth for "where does the article column live?".
+  // Returns viewport-coord metrics for the widest non-UI container element.
+  // Caller can add window.scrollX to `right`/`left` for page coords.
+  const ARTICLE_EXCLUDE = '.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, #tdoc-comment-layer, .tdoc-footer, .tdoc-modal-bg';
+  function getArticleMetrics() {
     const candidates = document.querySelectorAll('main, article, .wrap, .content, .container');
-    let best = null, bestW = 0;
+    let best = null, bestRect = null, bestW = 0;
     for (const el of candidates) {
-      if (el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, #tdoc-comment-layer, .tdoc-footer')) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width > bestW && r.width > 200) { best = el; bestW = r.width; }
-    }
-    return best || document.body;
-  }
-  function getContentRightEdge() {
-    const candidates = document.querySelectorAll('main, article, .wrap, .content, .container');
-    let bestRight = 0, bestW = 0;
-    for (const el of candidates) {
-      if (el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-footer')) continue;
+      if (el.closest(ARTICLE_EXCLUDE)) continue;
       const r = el.getBoundingClientRect();
       if (r.width > bestW && r.width > 200 && r.width < window.innerWidth) {
-        bestW = r.width; bestRight = r.right;
+        best = el; bestRect = r; bestW = r.width;
       }
     }
-    if (bestRight > 0) return bestRight + window.scrollX;
+    if (best) {
+      return { el: best, width: bestRect.width, right: bestRect.right, left: bestRect.left };
+    }
+    // Fallback: pick the widest prose-ish element so margin cards have somewhere
+    // to anchor on pages with no wrapping container.
+    let fbRight = 0, fbLeft = 0, fbW = 0;
     for (const el of document.querySelectorAll('p, h1, h2, h3')) {
+      if (el.closest(ARTICLE_EXCLUDE)) continue;
       const r = el.getBoundingClientRect();
-      if (r.width > bestW && r.width > 300 && r.width < window.innerWidth) {
-        bestW = r.width; bestRight = r.right;
+      if (r.width > fbW && r.width > 300 && r.width < window.innerWidth) {
+        fbW = r.width; fbRight = r.right; fbLeft = r.left;
       }
     }
-    return bestRight > 0 ? bestRight + window.scrollX : window.innerWidth - 320;
+    if (fbW > 0) {
+      return { el: document.body, width: fbW, right: fbRight, left: fbLeft };
+    }
+    return { el: document.body, width: Infinity, right: 0, left: 0 };
   }
 
   function repositionCards() {
@@ -863,7 +846,11 @@
       return;
     }
     const margin = 12, cardGap = 16, cardWidth = 280;
-    let cardLeft = getContentRightEdge() + cardGap;
+    const metrics = getArticleMetrics();
+    const rightEdge = metrics.width > 0 && metrics.right > 0
+      ? metrics.right + window.scrollX
+      : window.innerWidth - 320;
+    let cardLeft = rightEdge + cardGap;
     const maxLeft = window.scrollX + window.innerWidth - cardWidth - 12;
     if (cardLeft > maxLeft) cardLeft = maxLeft;
 
@@ -1052,13 +1039,9 @@
     const MIN_ARTICLE_WIDTH = 400;
     const MIN_COLUMN_WIDTH = 300;
     const isPhone = window.innerWidth < 700;
-    const article = pickArticleElement();
-    let articleWidth = Infinity, articleRight = 0;
-    if (article && article !== document.body) {
-      const r = article.getBoundingClientRect();
-      articleWidth = r.width;
-      articleRight = r.right;
-    }
+    const metrics = getArticleMetrics();
+    const articleWidth = metrics.el === document.body ? Infinity : metrics.width;
+    const articleRight = metrics.el === document.body ? 0 : metrics.right;
     const columnRoom = window.innerWidth - articleRight;
     const narrow = isPhone || articleWidth < MIN_ARTICLE_WIDTH || columnRoom < MIN_COLUMN_WIDTH;
     state.narrow = narrow;
@@ -1254,7 +1237,7 @@
   function openPopup(anchor, rect) {
     if (isFork) return; // read-only fork view: no new comments
     closePopup();
-    hideHoverOutline();
+    hideHoverUI();
     popup = document.createElement('div');
     popup.className = 'tdoc-popup';
     const needsSignIn = isPublished && !identity;
@@ -1403,20 +1386,46 @@
   }, true);
 
   document.addEventListener('mouseup', (e) => {
-    if (!dragState) return;
-    const { x0, y0, dragged, marquee } = dragState;
-    dragState = null;
-    if (marquee) marquee.remove();
-    if (!dragged) return;
-    const dragRect = {
-      left: Math.min(x0, e.pageX), top: Math.min(y0, e.pageY),
-      right: Math.max(x0, e.pageX), bottom: Math.max(y0, e.pageY),
-    };
-    const el = findArtifactIntersecting(dragRect);
-    if (!el) return;
-    e.preventDefault(); e.stopPropagation();
-    hideHoverOutline();
-    openPopup({ kind: 'element', selector: elementSelector(el), label: elementLabel(el), _el: el }, el.getBoundingClientRect());
+    // Unified mouseup: drag-to-comment branch first, otherwise fall through to
+    // text-selection-popup behavior. Single capture-phase listener avoids the
+    // race where drag-end outside an artifact would still trigger the bubble-
+    // phase selection-popup handler.
+    const ds = dragState;
+    if (ds) {
+      const { x0, y0, dragged, marquee } = ds;
+      dragState = null;
+      if (marquee) marquee.remove();
+      if (dragged) {
+        const dragRect = {
+          left: Math.min(x0, e.pageX), top: Math.min(y0, e.pageY),
+          right: Math.max(x0, e.pageX), bottom: Math.max(y0, e.pageY),
+        };
+        const el = findArtifactIntersecting(dragRect);
+        if (el) {
+          e.preventDefault(); e.stopPropagation();
+          hideHoverUI();
+          openPopup({ kind: 'element', selector: elementSelector(el), label: elementLabel(el), _el: el }, el.getBoundingClientRect());
+        }
+        // Dragged-but-no-artifact: do nothing (don't pop a text-selection popup).
+        return;
+      }
+    }
+    // Not a drag — text-selection popup behavior.
+    if (isInUI(e.target)) return;
+    if (e.target && e.target.nodeType === 1) {
+      const commentable = e.target.matches?.(COMMENTABLE) ? e.target : e.target.closest?.(COMMENTABLE);
+      if (commentable && !isInUI(commentable)) return;
+    }
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel.toString().trim();
+      if (text && text.length >= 2) {
+        const range = sel.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        const ctx = getContext(range, 60);
+        openPopup({ kind: 'text', text, context_before: ctx.before, context_after: ctx.after, _range: range }, rect);
+      }
+    }, 0);
   }, true);
 
   // ========== Hover affordance ==========
@@ -1503,28 +1512,10 @@
     if (pillTargetEl && next.closest && next.closest(COMMENTABLE) === pillTargetEl) return;
     if (isInUI(next)) hideHoverUI();
   });
-  // Hide retained alias used elsewhere
-  function hideHoverOutline() { hideHoverUI(); }
-  function hideHoverHint() { /* no-op kept for legacy callers */ }
 
   // ========== Selection → popup ==========
-  document.addEventListener('mouseup', (e) => {
-    if (isInUI(e.target)) return;
-    if (e.target.nodeType === 1) {
-      const commentable = e.target.matches?.(COMMENTABLE) ? e.target : e.target.closest?.(COMMENTABLE);
-      if (commentable && !isInUI(commentable)) return;
-    }
-    setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel.toString().trim();
-      if (text && text.length >= 2) {
-        const range = sel.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        const ctx = getContext(range, 60);
-        openPopup({ kind: 'text', text, context_before: ctx.before, context_after: ctx.after, _range: range }, rect);
-      }
-    }, 0);
-  });
+  // (See unified mouseup handler above — selection-popup branch lives in the
+  // capture-phase handler so drag and selection cannot race.)
 
   // ========== Root click handler (delegated): menus, drawer, deselect, anchor click ==========
   document.addEventListener('click', (e) => {

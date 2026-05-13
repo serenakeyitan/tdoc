@@ -34,9 +34,15 @@ function readBody(req) {
   });
 }
 
+// Escape `</script>` and HTML comment terminators so a malicious or stray value
+// inside the JSON payload can't break out of the surrounding <script> block.
+function safeJsonForScript(obj) {
+  return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
+}
+
 function injectOverlay(html, slug, version) {
   const overlay = fs.readFileSync(OVERLAY_PATH, 'utf8');
-  const cfg = `<script>window.__TDOC__ = ${JSON.stringify({
+  const cfg = `<script>window.__TDOC__ = ${safeJsonForScript({
     slug, version, identity: null, authConfigured: false, mode: 'local'
   })};</script>`;
   const inject = `${cfg}\n<script>${overlay}</script>`;

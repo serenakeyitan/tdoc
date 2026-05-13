@@ -61,6 +61,12 @@ function rand(n) {
   return [...a].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Escape `</script>` and HTML comment terminators so a malicious or stray value
+// inside the JSON payload can't break out of the surrounding <script> block.
+function safeJsonForScript(obj) {
+  return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
+}
+
 function injectOverlay(rawHtml, slug, version, identity) {
   const cfg = {
     slug, version,
@@ -69,7 +75,7 @@ function injectOverlay(rawHtml, slug, version, identity) {
     mode: 'published',
   };
   const inject =
-    `<script>window.__TDOC__ = ${JSON.stringify(cfg)};</script>\n` +
+    `<script>window.__TDOC__ = ${safeJsonForScript(cfg)};</script>\n` +
     `<script>${OVERLAY_JS}</script>`;
   if (rawHtml.includes('</body>')) return rawHtml.replace('</body>', `${inject}\n</body>`);
   return rawHtml + inject;
@@ -244,8 +250,7 @@ export default {
 
       // 2. Embed structured JSON for programmatic parsing.
       const jsonBlock = `<script type="application/json" id="tdoc-fork-comments">${
-        JSON.stringify({ slug, version: Number(vStr), exported: new Date().toISOString(), comments: openComments }, null, 2)
-          .replace(/<\/script>/gi, '<\\/script>')
+        safeJsonForScript({ slug, version: Number(vStr), exported: new Date().toISOString(), comments: openComments })
       }</script>\n`;
 
       // 3. Inline TDOC-COMMENT markers around anchored text. Done with simple
@@ -268,7 +273,7 @@ export default {
       if (kind === 'fork') {
         const forkCfg = { slug, version: Number(vStr), identity: null, authConfigured: false, mode: 'fork', originalSlug: slug };
         const inject =
-          `<script>window.__TDOC__ = ${JSON.stringify(forkCfg)};</script>\n` +
+          `<script>window.__TDOC__ = ${safeJsonForScript(forkCfg)};</script>\n` +
           `<script>${OVERLAY_JS}</script>`;
         if (bodyHtml.includes('</body>')) bodyHtml = bodyHtml.replace('</body>', `${inject}\n</body>`);
         else bodyHtml = bodyHtml + inject;
