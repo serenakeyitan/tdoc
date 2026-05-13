@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# tdoc-publish — first-time setup + upload doc to user's Cloudflare Worker.
+#
+# Usage: tdoc-publish <slug>
+#
+# First run:
+#   1. Verify wrangler installed + logged in
+#   2. Create R2 bucket, KV namespace
+#   3. Generate TDOC_UPLOAD_TOKEN, set as Worker secret
+#   4. Bundle overlay.js into worker source
+#   5. Deploy Worker
+#   6. Save config to ~/.tdoc/published.json
+#
+# Subsequent runs:
+#   Just upload the requested slug via /api/upload.
+
+set -euo pipefail
+
+SLUG="${1:-}"
+if [ -z "$SLUG" ]; then
+  echo "usage: tdoc-publish <slug>" >&2
+  exit 1
+fi
+
+SKILL_DIR="$HOME/.claude/skills/tdoc"
+TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"
+DOC_DIR="$TDOC_DIR/$SLUG"
+CONFIG_DIR="$HOME/.tdoc"
+CONFIG_FILE="$CONFIG_DIR/published.json"
+WORKER_DIR="$SKILL_DIR/worker"
+
+mkdir -p "$CONFIG_DIR"
+
+# Deps
+if ! command -v wrangler >/dev/null 2>&1; then
+  echo "tdoc publish needs wrangler. Install with: npm i -g wrangler" >&2
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "tdoc publish needs jq. Install with: brew install jq  (or apt-get install jq)" >&2
+  exit 1
+fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "tdoc publish needs node 18+." >&2
+  exit 1
+fi
+
+if [ ! -d "$DOC_DIR" ]; then
+  echo "no doc at $DOC_DIR — run /tdoc new <prompt> first." >&2
+  exit 1
+fi
+
+# --- bundle overlay.js into worker source ---
+bundle_worker() {
+  local out="$WORKER_DIR/_worker.bundled.js"
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const skill = process.env.SKILL_DIR;
+    const worker = fs.readFileSync(path.join(skill, "worker/worker.js"), "utf8");
+    const overlay = fs.readFileSync(path.join(skill, "server/overlay.js"), "utf8");
+    // Replace the whole declaration so JSON.stringify safely escapes everything.
+    const replaced = worker.replace(
+      /const OVERLAY_JS = `__TDOC_OVERLAY_JS__`;/,
+      "const OVERLAY_JS = " + JSON.stringify(overlay) + ";"
+    );
+    if (replaced === worker) {
+      console.error("bundle: failed to find OVERLAY_JS placeholder");
+      process.exit(1);
+    }
+    fs.writeFileSync(path.join(skill, "worker/_worker.bundled.js"), replaced);
+  '
+  echo "bundled: $out"
+}
+
+first_time_setup() {
+  echo "[tdoc] first-time publish setup"
+
+  # 1. wrangler login (idempotent — does nothing if already logged in)
+  echo "[tdoc] checking wrangler auth..."
+  if ! wrangler whoami >/dev/null 2>&1; then
+    echo "[tdoc] running wrangler login (browser will open)..."
+    wrangler login
+  fi
+
+  # 2. auto-detect account id + workers.dev subdomain via Cloudflare API
+  echo "[tdoc] detecting account + subdomain..."
+  local oauth_token account_id
+  oauth_token="$(grep -E '^oauth_token' "$HOME/.wrangler/config/default.toml" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')"
+  if [ -z "$oauth_token" ]; then
+    echo "[tdoc] could not read wrangler OAuth token. Re-run 'wrangler login'." >&2
+    exit 1
+  fi
+  account_id="$(wrangler whoami 2>/dev/null | grep -Eo '[a-f0-9]{32}' | head -1)"
+  if [ -z "$account_id" ]; then
+    echo "[tdoc] could not detect account id from wrangler whoami." >&2
+    exit 1
+  fi
+
+  local sub_resp
+  sub_resp="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/subdomain" \
+    -H "Authorization: Bearer $oauth_token")"
+  SUBDOMAIN="$(echo "$sub_resp" | jq -r '.result.subdomain // empty')"
+
+  if [ -z "$SUBDOMAIN" ] || [ "$SUBDOMAIN" = "null" ]; then
+    echo
+    echo "[tdoc] No workers.dev subdomain claimed on your account yet."
+    echo "      Claim one (one-time, ~10s) at:"
+    echo "        https://dash.cloudflare.com/$account_id/workers/onboarding"
+    echo "      Then re-run /tdoc publish $SLUG."
+    exit 1
+  fi
+  echo "[tdoc] subdomain: ${SUBDOMAIN}.workers.dev"
+
+  CUSTOM_DOMAIN=""
+  PUBLIC_HOST="tdoc-${SUBDOMAIN}.${SUBDOMAIN}.workers.dev"
+
+  # 3. create R2 bucket (idempotent via API)
+  echo "[tdoc] ensuring R2 bucket tdoc-docs exists..."
+  local r2_resp
+  r2_resp="$(curl -sS -X POST "https://api.cloudflare.com/client/v4/accounts/$account_id/r2/buckets" \
+    -H "Authorization: Bearer $oauth_token" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"tdoc-docs"}')"
+  local r2_code
+  r2_code="$(echo "$r2_resp" | jq -r '.errors[0].code // empty')"
+  if [ "$r2_code" = "10042" ]; then
+    echo
+    echo "[tdoc] ⚠ R2 is not enabled on your Cloudflare account yet."
+    echo "       Enable it (one-click, free up to 10GB) at:"
+    echo "         https://dash.cloudflare.com/$account_id/r2"
+    echo "       Then re-run /tdoc publish $SLUG."
+    exit 1
+  fi
+  # 10004 = bucket already exists, which is fine
+  if [ -n "$r2_code" ] && [ "$r2_code" != "10004" ]; then
+    echo "[tdoc] R2 bucket create failed: $r2_resp" >&2
+    exit 1
+  fi
+  echo "[tdoc] R2 bucket ready."
+
+  # 4. create or find KV namespace META (idempotent via API)
+  echo "[tdoc] ensuring KV namespace META exists..."
+  local kv_id kv_list
+  kv_list="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$account_id/storage/kv/namespaces?per_page=100" \
+    -H "Authorization: Bearer $oauth_token")"
+  kv_id="$(echo "$kv_list" | jq -r '.result[]? | select(.title=="META") | .id' | head -1)"
+  if [ -z "$kv_id" ]; then
+    local create_resp
+    create_resp="$(curl -sS -X POST "https://api.cloudflare.com/client/v4/accounts/$account_id/storage/kv/namespaces" \
+      -H "Authorization: Bearer $oauth_token" \
+      -H "Content-Type: application/json" \
+      -d '{"title":"META"}')"
+    kv_id="$(echo "$create_resp" | jq -r '.result.id // empty')"
+  fi
+  if [ -z "$kv_id" ]; then
+    echo "[tdoc] could not create or find KV namespace META." >&2
+    exit 1
+  fi
+  echo "[tdoc] KV namespace id: $kv_id"
+
+  # 5. generate upload token
+  local token
+  token="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+
+  # 6. write wrangler.toml
+  local worker_name="tdoc-${SUBDOMAIN}"
+  sed \
+    -e "s/PLACEHOLDER_USER/${SUBDOMAIN}/g" \
+    -e "s/PLACEHOLDER_KV_ID/${kv_id}/g" \
+    "$WORKER_DIR/wrangler.toml.template" > "$WORKER_DIR/wrangler.toml"
+
+  # 7. bundle + deploy
+  SKILL_DIR="$SKILL_DIR" bundle_worker
+  (cd "$WORKER_DIR" && wrangler deploy)
+
+  # 8. set secret (after first deploy so the worker exists)
+  echo "[tdoc] setting TDOC_UPLOAD_TOKEN secret..."
+  (cd "$WORKER_DIR" && echo "$token" | wrangler secret put TDOC_UPLOAD_TOKEN)
+
+  # 9. save config
+  jq -n \
+    --arg sub "$SUBDOMAIN" \
+    --arg tok "$token" \
+    --arg kv "$kv_id" \
+    --arg worker "$worker_name" \
+    --arg host "$PUBLIC_HOST" \
+    --arg custom "$CUSTOM_DOMAIN" \
+    '{subdomain:$sub, upload_token:$tok, kv_id:$kv, worker:$worker, public_host:$host, custom_domain:$custom, created: now | todate}' \
+    > "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+
+  if [ -n "$CUSTOM_DOMAIN" ]; then
+    echo "[tdoc] setup done. Worker deployed."
+    echo
+    echo "    ⚠ One more step for your custom domain:"
+    echo "    Go to https://dash.cloudflare.com → Workers & Pages → ${worker_name}"
+    echo "    → Settings → Triggers → Custom Domains → Add Custom Domain"
+    echo "    → enter: ${CUSTOM_DOMAIN}"
+    echo
+    echo "    Until then, your Worker is reachable at:"
+    echo "      https://${worker_name}.${SUBDOMAIN}.workers.dev"
+    echo "    Final URL after binding the custom domain:"
+    echo "      https://${CUSTOM_DOMAIN}"
+  else
+    echo "[tdoc] setup done. Worker at: https://${worker_name}.${SUBDOMAIN}.workers.dev"
+  fi
+}
+
+if [ ! -f "$CONFIG_FILE" ]; then
+  SKILL_DIR="$SKILL_DIR" first_time_setup
+fi
+
+SUBDOMAIN="$(jq -r .subdomain "$CONFIG_FILE")"
+TOKEN="$(jq -r .upload_token "$CONFIG_FILE")"
+WORKER_NAME="$(jq -r .worker "$CONFIG_FILE")"
+PUBLIC_HOST="$(jq -r '.public_host // empty' "$CONFIG_FILE")"
+CUSTOM_DOMAIN="$(jq -r '.custom_domain // empty' "$CONFIG_FILE")"
+# Fallback for configs created before the domain choice was added
+if [ -z "$PUBLIC_HOST" ]; then PUBLIC_HOST="${SUBDOMAIN}.workers.dev"; fi
+# Upload always hits the workers.dev URL (custom domain binding may not be active yet);
+# the public-facing link we show the user is PUBLIC_HOST.
+UPLOAD_BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
+PUBLIC_BASE="https://${PUBLIC_HOST}"
+
+# --- upload latest version of slug ---
+META_FILE="$DOC_DIR/meta.json"
+if [ ! -f "$META_FILE" ]; then
+  echo "no meta.json at $META_FILE" >&2
+  exit 1
+fi
+
+VERSION="$(jq -r '.versions | sort_by(.n) | last | .n' "$META_FILE")"
+HTML_FILE="$DOC_DIR/v${VERSION}/index.html"
+if [ ! -f "$HTML_FILE" ]; then
+  echo "no html at $HTML_FILE" >&2
+  exit 1
+fi
+
+echo "[tdoc] uploading $SLUG v$VERSION to $UPLOAD_BASE ..."
+PAYLOAD="$(jq -n \
+  --arg slug "$SLUG" \
+  --argjson version "$VERSION" \
+  --rawfile html "$HTML_FILE" \
+  --slurpfile meta "$META_FILE" \
+  '{slug:$slug, version:$version, html:$html, meta: $meta[0]}')"
+
+RESP="$(curl -sS -X POST "$UPLOAD_BASE/api/upload" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary "$PAYLOAD")"
+
+echo "$RESP" | jq .
+echo
+echo "Published: $PUBLIC_BASE/d/$SLUG/v/$VERSION"
+if [ -n "$CUSTOM_DOMAIN" ] && [ "$PUBLIC_HOST" = "$CUSTOM_DOMAIN" ]; then
+  echo "(If $CUSTOM_DOMAIN isn't bound yet, the same doc is at $UPLOAD_BASE/d/$SLUG/v/$VERSION)"
+fi

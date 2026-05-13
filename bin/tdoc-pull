@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# tdoc-pull — pull comments from the published Worker back to local comments.json.
+#
+# Usage: tdoc-pull <slug>
+set -euo pipefail
+
+SLUG="${1:-}"
+if [ -z "$SLUG" ]; then echo "usage: tdoc-pull <slug>" >&2; exit 1; fi
+
+CONFIG_FILE="$HOME/.tdoc/published.json"
+TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "no ~/.tdoc/published.json — run /tdoc publish <slug> first." >&2
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then echo "needs jq" >&2; exit 1; fi
+
+SUBDOMAIN="$(jq -r .subdomain "$CONFIG_FILE")"
+WORKER_NAME="$(jq -r .worker "$CONFIG_FILE")"
+BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
+
+OUT="$TDOC_DIR/$SLUG/comments.json"
+mkdir -p "$(dirname "$OUT")"
+curl -sS "$BASE/api/comments?slug=$SLUG" | jq . > "$OUT"
+echo "Pulled $(jq 'length' "$OUT") comments for $SLUG -> $OUT"
