@@ -213,6 +213,13 @@
   body [contenteditable] {
     -webkit-user-select: text; user-select: text; }
 
+  /* When there are comments AND we are in margin-column mode, reserve a fixed
+     ~320px column on the right for cards. Shrinking the window then "eats"
+     into the LEFT margin first, keeping the cards visible. Without this, the
+     docs own auto-centering shrinks both sides symmetrically and the cards
+     get clipped well before drawer-mode kicks in. */
+  body.tdoc-has-comments:not(.tdoc-narrow) { padding-right: 320px !important; }
+
   /* "More" dropdown trigger — declared here so the media query below can
      reliably flip it to display: inline-flex on small screens. */
   .tdoc-bar .tdoc-secondary-toggle { display: none; background: transparent;
@@ -960,19 +967,34 @@
   // the actual article width + the space needed by the margin column. This
   // beats a fixed CSS breakpoint because docs come in many widths.
   function evaluateNarrowMode() {
-    const CARD_WIDTH = 280;
-    const CARD_GAP = 16;
-    const SAFE_PAD = 24;
-    const contentRight = getContentRightEdge();
-    const need = CARD_WIDTH + CARD_GAP + SAFE_PAD;
-    const haveRoom = (window.innerWidth - contentRight) >= need;
-    // Also force narrow-mode on very small viewports regardless of measurement.
+    // Switch to drawer-mode when the article itself gets uncomfortably narrow,
+    // OR the viewport is phone-sized. Because we reserve 320px right-padding
+    // for the card column (see body.tdoc-has-comments rule), the article
+    // shrinks symmetrically only on the LEFT as the window shrinks — so the
+    // card column stays visible until the doc itself becomes unreadable.
+    const MIN_ARTICLE_WIDTH = 400;  // below this, prose feels cramped → drawer
     const isPhone = window.innerWidth < 700;
-    const narrow = isPhone || !haveRoom;
+    const article = pickArticleElement();
+    let articleWidth = Infinity;
+    if (article) articleWidth = article.getBoundingClientRect().width;
+    const narrow = isPhone || articleWidth < MIN_ARTICLE_WIDTH;
     document.body.classList.toggle('tdoc-narrow', narrow);
     fab.style.display = (narrow && activeComments.length > 0) ? 'inline-flex' : 'none';
     if (!narrow) commentLayer.classList.remove('open');
     return narrow;
+  }
+  function pickArticleElement() {
+    const candidates = document.querySelectorAll('main, article, .wrap, .content, .container');
+    let best = null;
+    let bestWidth = 0;
+    for (const el of candidates) {
+      if (el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, #tdoc-comment-layer')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > bestWidth && r.width > 200) { best = el; bestWidth = r.width; }
+    }
+    if (best) return best;
+    // Fallback to body
+    return document.body;
   }
   window.addEventListener('resize', () => {
     requestAnimationFrame(() => { evaluateNarrowMode(); repositionAll(); });
