@@ -808,41 +808,18 @@
       })
       .sort((a, b) => a.top - b.top);
 
-    // Snap the ACTIVE card flush to its anchor. Other (inactive) cards stack
-    // around it; if they would overlap the active card, they yield. This keeps
-    // the spatial connection between what the user clicked and what they see.
-    const activeId = state.activeId;
-    const activeRow = anchored.find(x => x.c.id === activeId);
-    let activeY = null, activeBottom = null;
-    if (activeRow) {
-      activeY = activeRow.top;
-      activeRow.card.style.top = activeY + 'px';
-      activeRow.card.style.left = cardLeft + 'px';
-      activeRow.card.classList.remove('tdoc-unanchored');
-      // Measure after style applied
-      activeBottom = activeY + activeRow.card.offsetHeight;
-    }
-
-    // Then layout the rest in document order, skipping the active and yielding
-    // around its rectangle to keep them from covering it.
+    // Plain document-order stacking. Each card aligns to its anchor's top;
+    // if two would overlap, the later one drops below the previous by margin.
+    // No special handling for the active card — its position is stable.
     let prevBottom = 0;
     for (const row of anchored) {
-      if (row === activeRow) continue;
       let y = row.top;
       if (y < prevBottom + margin) y = prevBottom + margin;
-      // If this card would overlap the active card's vertical span, push it
-      // below the active card.
-      if (activeY !== null) {
-        const yBottom = y + row.card.offsetHeight;
-        const overlaps = !(yBottom < activeY - margin || y > activeBottom + margin);
-        if (overlaps) y = activeBottom + margin;
-      }
       row.card.style.top = y + 'px';
       row.card.style.left = cardLeft + 'px';
       row.card.classList.remove('tdoc-unanchored');
-      prevBottom = Math.max(prevBottom, y + row.card.offsetHeight);
+      prevBottom = y + row.card.offsetHeight;
     }
-    if (activeBottom !== null) prevBottom = Math.max(prevBottom, activeBottom);
 
     const unanchored = state.activeComments
       .map(c => ({ c, card: state.cardEls.get(c.id) }))
@@ -862,18 +839,16 @@
     state.activeId = id || null;
     document.querySelectorAll('.tdoc-anchor-mark.active, .tdoc-margin-comment.active, .tdoc-element-outline.active')
       .forEach(el => el.classList.remove('active'));
-    if (!id) { rebuildSharedHighlights(); repositionCards(); return; }
+    if (!id) { rebuildSharedHighlights(); return; }
     const mark = state.anchorMarks.get(id);
     if (mark?.el?.classList) mark.el.classList.add('active');
     const card = state.cardEls.get(id);
     card?.classList.add('active');
     rebuildSharedHighlights();
-    // Snap the card flush to its anchor. Other cards yield around it.
-    repositionCards();
-    // After the highlight class lands, ensure both the anchor and the card are
-    // visible in the viewport. Without this, clicking a card whose anchor is
-    // off-screen (or vice-versa) feels broken: the "active" state lights up
-    // somewhere the user can't see. Center the anchor when off-screen.
+    // Do NOT reposition cards on click — only the .active highlight should
+    // change. Reordering cards every click is disorienting; users expect
+    // stable positions and just the visual cue swap. Cards keep whatever
+    // layout repositionCards() established at refresh/resize time.
     scrollAnchorIntoView(id);
   }
 
@@ -1125,10 +1100,19 @@
         <span class="hint">${needsSignIn ? '' : '⌘+Enter to submit'}</span>
         <button class="submit">${needsSignIn ? 'Sign in' : 'Comment'}</button>
       </div>`;
-    popup.style.top = (window.scrollY + rect.bottom + 8) + 'px';
+    // Default: open below `rect` (used for text-selection popups so it follows
+    // the cursor). For element anchors invoked via the Comment pill, we want
+    // the popup to open ABOVE the pill so it doesn't dive into the artifact
+    // body. The caller signals this by setting anchor._placeAbove = true.
+    document.body.appendChild(popup);   // append first so offsetHeight is known
+    const popupH = popup.offsetHeight || 140;
+    if (anchor._placeAbove && rect.top - 8 - popupH >= 8) {
+      popup.style.top = (window.scrollY + rect.top - popupH - 8) + 'px';
+    } else {
+      popup.style.top = (window.scrollY + rect.bottom + 8) + 'px';
+    }
     const left = Math.min(rect.left + window.scrollX, window.innerWidth - 340);
     popup.style.left = Math.max(8, left) + 'px';
-    document.body.appendChild(popup);
 
     if (anchor.kind === 'text' && anchor._range) {
       setPendingTextHighlight(anchor._range);
@@ -1303,15 +1287,18 @@
       e.stopPropagation();
       e.preventDefault();
       const target = pillTargetEl;
+      // Capture the pill's own rect BEFORE we hide it — that's where the
+      // popup should attach (just above the pill the user clicked).
+      const pillRect = commentPill.getBoundingClientRect();
       hideHoverUI();
       if (!target) return;
-      const tr = target.getBoundingClientRect();
       openPopup({
         kind: 'element',
         selector: elementSelector(target),
         label: elementLabel(target),
         _el: target,
-      }, tr);
+        _placeAbove: true,
+      }, pillRect);
     };
     pillTargetEl = el;
     document.body.appendChild(commentPill);
