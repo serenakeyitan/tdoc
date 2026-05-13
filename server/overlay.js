@@ -7,7 +7,7 @@
 //   - Endpoints: /api/comments, /api/reactions, /api/auth/device/start,
 //     /api/auth/device/poll, /api/auth/logout, /d/<slug>/v/<n>/export
 //   - Globals: window.__tdocCopyDocMd(includeComments), window.__tdocCopyCommentMd(id, btn)
-//   - Body classes: tdoc-has-comments, tdoc-narrow, tdoc-doc-dark
+//   - Body classes: tdoc-has-comments, tdoc-narrow
 //   - Keyboard: ⌘/Ctrl-Enter submits, Esc cancels.
 //
 // Highlight rendering: CSS Custom Highlight API (CSS.highlights). One named
@@ -41,22 +41,9 @@
     document.head.appendChild(m);
   }
 
-  // Classify the doc's actual painted background. We tag `body.tdoc-doc-dark`
-  // for highlight + footer colors so a white doc keeps yellow highlights even
-  // when the OS is in dark mode.
-  function classifyDocTheme() {
-    const bg = getComputedStyle(document.body).backgroundColor || 'rgb(255,255,255)';
-    const m = bg.match(/\d+/g);
-    if (!m || m.length < 3) return;
-    const [r, g, b] = m.map(Number);
-    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    document.body.classList.toggle('tdoc-doc-dark', lum < 0.5);
-  }
-  setTimeout(classifyDocTheme, 0);
-
   // ========== Styles ==========
   // Each logical group is one comment block; rules within a group are tightly
-  // packed. Visual modes (narrow, dark) live at the bottom and override base.
+  // packed. The narrow visual mode lives at the bottom and overrides base.
   const css = `
   /* Layout */
   body { padding-top: 44px !important; padding-bottom: 24px; -webkit-user-select: none; user-select: none; }
@@ -300,103 +287,6 @@
   .tdoc-footer .sep { color: #ccc; }
   @media (max-width: 700px) { .tdoc-footer .tdoc-footer-row { flex-direction: column; gap: 4px; } .tdoc-footer .sep { display: none; } }
 
-  /* Dark mode (OS preference) + doc-dark (per-doc classification) */
-  body.tdoc-doc-dark ::highlight(tdoc-pending) { background-color: #8a7400; }
-  body.tdoc-doc-dark ::highlight(tdoc-anchor) { background-color: #5e4f00; }
-  body.tdoc-doc-dark ::highlight(tdoc-anchor-active) {
-    background-color: #c79900;
-    text-decoration: underline solid #ffd84d;
-    text-decoration-thickness: 3px;
-    text-underline-offset: 2px;
-  }
-  body.tdoc-doc-dark .tdoc-anchor-mark { background: #5e4f00; color: inherit; }
-  body.tdoc-doc-dark .tdoc-anchor-mark:hover { background: #7a6700; }
-  body.tdoc-doc-dark .tdoc-anchor-mark.active { background: #c79900; box-shadow: 0 -3px 0 -1px #ffd84d inset; }
-  body.tdoc-doc-dark .tdoc-footer { color: #777; border-top-color: #2a2a2a; }
-  body.tdoc-doc-dark .tdoc-footer a { color: #999; }
-  body.tdoc-doc-dark .tdoc-footer a:hover { color: #8ab0ff; }
-  body.tdoc-doc-dark .tdoc-footer .sep { color: #3a3a3a; }
-  /* Overlay chrome (cards, popup, modal, drawer, picker) goes dark ONLY when
-     the doc itself is dark. We deliberately ignore prefers-color-scheme here:
-     having dark cards float on a white doc looks broken; having light cards on
-     a dark doc looks broken. Match what the doc actually paints. */
-  body.tdoc-doc-dark .tdoc-margin-comment { background: #161616; border-color: #2a2a2a; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
-  body.tdoc-doc-dark .tdoc-margin-comment.active { box-shadow: 0 4px 16px rgba(22,82,240,0.35); border-color: #1652f0; }
-  body.tdoc-doc-dark .tdoc-margin-comment.tdoc-unanchored::before { color: #777; }
-  body.tdoc-doc-dark .tdoc-margin-comment .author .login,
-  body.tdoc-doc-dark .tdoc-margin-comment .text { color: #e5e5e5; }
-  body.tdoc-doc-dark .tdoc-margin-comment .author .anon,
-  body.tdoc-doc-dark .tdoc-margin-comment .meta,
-  body.tdoc-doc-dark .tdoc-margin-comment .copy-md { color: #888; }
-  body.tdoc-doc-dark .tdoc-margin-comment .del,
-  body.tdoc-doc-dark .tdoc-reply .del { color: #ff6b6b; }
-  body.tdoc-doc-dark .tdoc-margin-comment .copy-md:hover,
-  body.tdoc-doc-dark .tdoc-margin-comment .tdoc-reply-toggle,
-  body.tdoc-doc-dark .tdoc-replies-toggle,
-  body.tdoc-doc-dark .tdoc-emoji-picker button.tdoc-emoji-text,
-  body.tdoc-doc-dark .tdoc-react-add:hover { color: #4a8cff; }
-  body.tdoc-doc-dark .tdoc-react-chip { background: #1f1f1f; border-color: #2e2e2e; color: #d0d0d0; }
-  body.tdoc-doc-dark .tdoc-react-chip:hover { background: #262626; }
-  body.tdoc-doc-dark .tdoc-react-chip.mine { background: rgba(22,82,240,0.18); border-color: #1652f0; color: #8ab0ff; }
-  body.tdoc-doc-dark .tdoc-react-add { color: #777; }
-  body.tdoc-doc-dark .tdoc-emoji-picker { background: #161616; border-color: #2a2a2a; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
-  body.tdoc-doc-dark .tdoc-emoji-picker button:hover { background: #262626; }
-  body.tdoc-doc-dark .tdoc-emoji-picker button.tdoc-emoji-text:hover { background: rgba(22,82,240,0.18); }
-  body.tdoc-doc-dark .tdoc-replies-toggle { border-top-color: #2a2a2a; }
-  body.tdoc-doc-dark .tdoc-reply { border-left-color: #2a2a2a; }
-  body.tdoc-doc-dark .tdoc-reply .author .login { color: #e5e5e5; }
-  body.tdoc-doc-dark .tdoc-reply .author .anon,
-  body.tdoc-doc-dark .tdoc-reply .meta { color: #888; }
-  body.tdoc-doc-dark .tdoc-reply .text { color: #d0d0d0; }
-  body.tdoc-doc-dark .tdoc-reply-form { border-top-color: #2a2a2a; }
-  body.tdoc-doc-dark .tdoc-reply-form textarea { background: #0f0f0f; color: #e5e5e5; border-color: #2a2a2a; }
-  body.tdoc-doc-dark .tdoc-reply-form textarea:focus { border-color: #1652f0; }
-  body.tdoc-doc-dark .tdoc-modal { background: #161616; color: #e5e5e5; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
-  body.tdoc-doc-dark .tdoc-modal p, body.tdoc-doc-dark .tdoc-modal .step { color: #b8b8b8; }
-  body.tdoc-doc-dark .tdoc-modal button { background: #1f1f1f; border-color: #2a2a2a; color: #e5e5e5; }
-  body.tdoc-doc-dark .tdoc-modal button.primary { background: #1652f0; border-color: #1652f0; color: #fff; }
-  body.tdoc-doc-dark .tdoc-modal button.primary:hover { background: #1245d0; }
-  body.tdoc-doc-dark .tdoc-modal .status { color: #888; }
-  body.tdoc-doc-dark .tdoc-modal .muted { color: #999; }
-  body.tdoc-doc-dark .tdoc-modal .divider { border-top-color: #2a2a2a; }
-  body.tdoc-doc-dark .tdoc-modal .danger { color: #ff7a7a; }
-  body.tdoc-doc-dark .tdoc-modal code { background: #0f0f0f; color: #e5e5e5; }
-  body.tdoc-doc-dark.tdoc-narrow #tdoc-comment-layer { background: #0f0f0f; border-top-color: #2a2a2a; box-shadow: 0 -4px 24px rgba(0,0,0,0.6); }
-  body.tdoc-doc-dark.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { background: #444; }
-
-  /* User-forced DARK theme (top-bar toggle, state='dark').
-     Filter-inverts the doc body so it's readable on dark, while counter-
-     inverting media so images / videos / canvas / svg keep their colors.
-     The overlay chrome lives outside body (or already styled via .tdoc-doc-dark)
-     so we exclude it from the filter via a tdoc-no-invert hook. */
-  html.tdoc-force-dark body { filter: invert(1) hue-rotate(180deg); background: #fff; }
-  html.tdoc-force-dark body img,
-  html.tdoc-force-dark body video,
-  html.tdoc-force-dark body iframe,
-  html.tdoc-force-dark body canvas,
-  html.tdoc-force-dark body svg,
-  html.tdoc-force-dark body picture,
-  html.tdoc-force-dark body .tdoc-no-invert { filter: invert(1) hue-rotate(180deg); }
-  /* Overlay chrome must NOT be inverted — it has its own dark theme via
-     body.tdoc-doc-dark (which we also set when force-dark is on). */
-  html.tdoc-force-dark .tdoc-bar,
-  html.tdoc-force-dark .tdoc-margin-comment,
-  html.tdoc-force-dark .tdoc-popup,
-  html.tdoc-force-dark .tdoc-modal,
-  html.tdoc-force-dark .tdoc-modal-bg,
-  html.tdoc-force-dark #tdoc-comment-layer,
-  html.tdoc-force-dark .tdoc-footer,
-  html.tdoc-force-dark .tdoc-emoji-picker,
-  html.tdoc-force-dark .tdoc-secondary-menu,
-  html.tdoc-force-dark .tdoc-menu,
-  html.tdoc-force-dark .tdoc-comment-pill,
-  html.tdoc-force-dark .tdoc-hover-outline,
-  html.tdoc-force-dark .tdoc-element-outline,
-  html.tdoc-force-dark .tdoc-fab { filter: none; }
-
-  /* User-forced LIGHT theme: just ensure the overlay stays in light mode
-     even if the painted background is dark. classifyDocTheme is skipped. */
-  html.tdoc-force-light body.tdoc-doc-dark { /* no-op marker — JS removes the class */ }
   `;
   const style = document.createElement('style');
   style.textContent = css;
@@ -479,9 +369,6 @@
     <span class="title" id="tdoc-title">tdoc</span>
     <span class="slug">${slugLabel}</span>
     <span class="spacer"></span>
-    <button id="tdoc-theme-btn" class="tdoc-icon-btn" title="Toggle theme (auto / light / dark)" aria-label="Toggle theme">
-      <svg id="tdoc-theme-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><!-- icon set in JS --></svg>
-    </button>
     ${publishShareBtnHtml}
     <div class="tdoc-menu-wrap">
       <button id="tdoc-copy-md-btn" class="tdoc-icon-btn" title="Copy as Markdown" aria-label="Copy as Markdown">
@@ -501,51 +388,11 @@
       ${isPublished ? '<button data-action="share">Share</button><button data-action="fork">Fork</button>' : ''}
       ${isLocal ? '<button data-action="publish">Publish</button>' : ''}
       ${isFork ? '<button data-action="saveas">Save copy</button>' : ''}
-      <button data-action="theme">Theme</button>
       <button data-action="home">All docs</button>
     </div>
   `;
   document.body.appendChild(bar);
 
-  // ========== Theme toggle (auto / light / dark) ==========
-  // Three states stored in localStorage:
-  //   auto  → follow the doc's painted background (current default)
-  //   light → force light overlay; counter any doc darkness
-  //   dark  → force dark overlay + filter-invert the doc body so it's readable
-  const THEME_KEY = 'tdoc.theme';
-  function getTheme() { try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch { return 'auto'; } }
-  function setTheme(t) { try { localStorage.setItem(THEME_KEY, t); } catch {} applyTheme(t); }
-  const SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>';
-  const MOON = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
-  const AUTO = '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>';
-  function applyTheme(t) {
-    const root = document.documentElement;
-    root.classList.toggle('tdoc-force-light', t === 'light');
-    root.classList.toggle('tdoc-force-dark', t === 'dark');
-    // Recompute the body.tdoc-doc-dark class — used by all overlay dark-mode rules.
-    // In auto: follow painted background. In light: never. In dark: always.
-    if (t === 'auto') classifyDocTheme();
-    else document.body.classList.toggle('tdoc-doc-dark', t === 'dark');
-    // Swap the icon to reflect current state
-    const icon = document.getElementById('tdoc-theme-icon');
-    if (icon) {
-      icon.innerHTML = t === 'light' ? SUN : t === 'dark' ? MOON : AUTO;
-      const btn = document.getElementById('tdoc-theme-btn');
-      if (btn) btn.title = `Theme: ${t} (click to cycle)`;
-    }
-  }
-  function cycleTheme() {
-    const order = ['auto', 'light', 'dark'];
-    const cur = getTheme();
-    const next = order[(order.indexOf(cur) + 1) % order.length];
-    setTheme(next);
-  }
-  // Initialize: read stored choice, apply.
-  applyTheme(getTheme());
-  document.getElementById('tdoc-theme-btn')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    cycleTheme();
-  });
 
   const titleEl = document.querySelector('title');
   if (titleEl && titleEl.textContent) document.getElementById('tdoc-title').textContent = titleEl.textContent;
@@ -635,7 +482,6 @@
       if (b.dataset.action === 'fork') forkAndDownload();
       if (b.dataset.action === 'share') showShareModal();
       if (b.dataset.action === 'publish') showPublishModal();
-      if (b.dataset.action === 'theme') cycleTheme();
       if (b.dataset.action === 'saveas') {
         const a = document.createElement('a');
         a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
