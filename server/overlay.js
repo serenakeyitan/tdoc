@@ -808,15 +808,42 @@
       })
       .sort((a, b) => a.top - b.top);
 
-    let prevBottom = 0;
-    for (const { card, top } of anchored) {
-      let y = top;
-      if (y < prevBottom + margin) y = prevBottom + margin;
-      card.style.top = y + 'px';
-      card.style.left = cardLeft + 'px';
-      card.classList.remove('tdoc-unanchored');
-      prevBottom = y + card.offsetHeight;
+    // Snap the ACTIVE card flush to its anchor. Other (inactive) cards stack
+    // around it; if they would overlap the active card, they yield. This keeps
+    // the spatial connection between what the user clicked and what they see.
+    const activeId = state.activeId;
+    const activeRow = anchored.find(x => x.c.id === activeId);
+    let activeY = null, activeBottom = null;
+    if (activeRow) {
+      activeY = activeRow.top;
+      activeRow.card.style.top = activeY + 'px';
+      activeRow.card.style.left = cardLeft + 'px';
+      activeRow.card.classList.remove('tdoc-unanchored');
+      // Measure after style applied
+      activeBottom = activeY + activeRow.card.offsetHeight;
     }
+
+    // Then layout the rest in document order, skipping the active and yielding
+    // around its rectangle to keep them from covering it.
+    let prevBottom = 0;
+    for (const row of anchored) {
+      if (row === activeRow) continue;
+      let y = row.top;
+      if (y < prevBottom + margin) y = prevBottom + margin;
+      // If this card would overlap the active card's vertical span, push it
+      // below the active card.
+      if (activeY !== null) {
+        const yBottom = y + row.card.offsetHeight;
+        const overlaps = !(yBottom < activeY - margin || y > activeBottom + margin);
+        if (overlaps) y = activeBottom + margin;
+      }
+      row.card.style.top = y + 'px';
+      row.card.style.left = cardLeft + 'px';
+      row.card.classList.remove('tdoc-unanchored');
+      prevBottom = Math.max(prevBottom, y + row.card.offsetHeight);
+    }
+    if (activeBottom !== null) prevBottom = Math.max(prevBottom, activeBottom);
+
     const unanchored = state.activeComments
       .map(c => ({ c, card: state.cardEls.get(c.id) }))
       .filter(x => x.card && !state.anchorMarks.get(x.c.id));
@@ -835,11 +862,42 @@
     state.activeId = id || null;
     document.querySelectorAll('.tdoc-anchor-mark.active, .tdoc-margin-comment.active, .tdoc-element-outline.active')
       .forEach(el => el.classList.remove('active'));
-    if (!id) { rebuildSharedHighlights(); return; }
+    if (!id) { rebuildSharedHighlights(); repositionCards(); return; }
     const mark = state.anchorMarks.get(id);
     if (mark?.el?.classList) mark.el.classList.add('active');
-    state.cardEls.get(id)?.classList.add('active');
+    const card = state.cardEls.get(id);
+    card?.classList.add('active');
     rebuildSharedHighlights();
+    // Snap the card flush to its anchor. Other cards yield around it.
+    repositionCards();
+    // After the highlight class lands, ensure both the anchor and the card are
+    // visible in the viewport. Without this, clicking a card whose anchor is
+    // off-screen (or vice-versa) feels broken: the "active" state lights up
+    // somewhere the user can't see. Center the anchor when off-screen.
+    scrollAnchorIntoView(id);
+  }
+
+  function scrollAnchorIntoView(id) {
+    const mark = state.anchorMarks.get(id);
+    if (!mark) return;
+    let anchorRect = null;
+    if (mark.ranges?.[0]) anchorRect = mark.ranges[0].getBoundingClientRect();
+    else if (mark.el?.getBoundingClientRect) anchorRect = mark.el.getBoundingClientRect();
+    else if (mark.targetEl?.getBoundingClientRect) anchorRect = mark.targetEl.getBoundingClientRect();
+    if (!anchorRect) return;
+
+    // We consider the anchor "comfortably visible" if its top is between the
+    // bar (44px) and 60% of the viewport. Otherwise smooth-scroll so it lands
+    // in the upper third — readable, with room for the card next to it.
+    const barH = 44;
+    const top = anchorRect.top;
+    const vpH = window.innerHeight;
+    const comfortableMin = barH + 80;
+    const comfortableMax = vpH * 0.6;
+    if (top >= comfortableMin && top <= comfortableMax) return;
+    const targetTop = vpH * 0.25;          // land at 25% of viewport
+    const delta = top - targetTop;
+    window.scrollBy({ top: delta, behavior: 'smooth' });
   }
 
   // ========== Element outlines (saved + pending) ==========
