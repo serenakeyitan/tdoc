@@ -169,16 +169,32 @@
   .tdoc-element-outline.pending { border-color: #f0d000; border-width: 2px; background: transparent; }
   .tdoc-element-outline.active { border-color: #1652f0; border-width: 2px; box-shadow: 0 0 0 4px rgba(22,82,240,0.18); }
   .tdoc-hover-outline { position: absolute; pointer-events: none; z-index: 999995; border: 2px dashed #1652f0; border-radius: 4px; background: rgba(22,82,240,0.06); box-sizing: border-box; transition: opacity .12s; }
-  /* Clickable pill that appears over commentable artifacts (img/canvas/svg/video/pre).
-     Sits at the top-right corner of the artifact, primary blue, looks like a real button. */
-  .tdoc-comment-pill { position: absolute; z-index: 999998;
-    background: #1652f0; color: #fff; font: 600 12px system-ui;
-    padding: 5px 10px; border: none; border-radius: 999px; cursor: pointer;
-    box-shadow: 0 2px 8px rgba(22,82,240,0.35);
-    display: inline-flex; align-items: center; gap: 5px;
-    transition: transform .12s, box-shadow .12s; }
-  .tdoc-comment-pill:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(22,82,240,0.45); }
-  .tdoc-comment-pill svg { width: 13px; height: 13px; }
+  /* Clickable pill that appears NEXT TO commentable artifacts (img/canvas/svg/video/pre).
+     Positioned just outside the artifact's right edge so it can't obscure
+     content. Uses !important on the visible colors to defend against doc-side
+     button:hover rules that would otherwise repaint our background. */
+  .tdoc-comment-pill {
+    position: absolute !important; z-index: 999998 !important;
+    background: #1652f0 !important; color: #fff !important;
+    font: 600 12px system-ui !important;
+    padding: 6px 12px !important;
+    border: none !important; border-radius: 999px !important;
+    cursor: pointer !important;
+    box-shadow: 0 2px 10px rgba(22,82,240,0.45) !important;
+    display: inline-flex !important; align-items: center !important; gap: 5px !important;
+    transition: transform .12s, background-color .12s, box-shadow .12s !important;
+    line-height: 1 !important;
+    text-decoration: none !important;
+    /* Make sure no doc reset can hide it */
+    opacity: 1 !important; visibility: visible !important;
+  }
+  .tdoc-comment-pill:hover {
+    background: #1245d0 !important; color: #fff !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 14px rgba(22,82,240,0.55) !important;
+  }
+  .tdoc-comment-pill:active { background: #0f3bb0 !important; transform: translateY(0) !important; }
+  .tdoc-comment-pill svg { width: 13px !important; height: 13px !important; flex-shrink: 0 !important; stroke: #fff !important; }
   .tdoc-drag-marquee { position: absolute; pointer-events: none; z-index: 999997; border: 1.5px solid #1652f0; background: rgba(22,82,240,0.1); box-sizing: border-box; }
 
   /* Popup (new-comment) */
@@ -1217,10 +1233,33 @@
     commentPill.type = 'button';
     commentPill.setAttribute('aria-label', 'Comment on this');
     commentPill.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment`;
-    // Anchor near the top-right corner of the element, inset slightly inward
-    // so the pill always sits over the artifact (not floating in margin).
-    commentPill.style.top = (window.scrollY + r.top + 8) + 'px';
-    commentPill.style.left = (window.scrollX + Math.max(r.left + 8, r.right - 110)) + 'px';
+    // Position the pill OUTSIDE the artifact so it can't cover any content.
+    // Preference order: right of the artifact (if room), then above, then below,
+    // then inside the top-right corner as a last resort.
+    const pillW = 110;        // approx; refined after layout
+    const pillH = 30;
+    const gap = 8;
+    const vpW = window.innerWidth, vpH = window.innerHeight;
+    let top, left;
+    if (r.right + gap + pillW <= vpW - 8) {
+      // Right of the artifact, vertically aligned with its top
+      top = window.scrollY + r.top;
+      left = window.scrollX + r.right + gap;
+    } else if (r.top - gap - pillH >= 8) {
+      // Above the artifact, right-aligned
+      top = window.scrollY + r.top - pillH - gap;
+      left = window.scrollX + Math.max(8, r.right - pillW);
+    } else if (r.bottom + gap + pillH <= vpH + window.scrollY) {
+      // Below the artifact, right-aligned
+      top = window.scrollY + r.bottom + gap;
+      left = window.scrollX + Math.max(8, r.right - pillW);
+    } else {
+      // Fallback: inside top-right (cramped layouts)
+      top = window.scrollY + r.top + 8;
+      left = window.scrollX + Math.max(r.left + 8, r.right - pillW - 8);
+    }
+    commentPill.style.top = top + 'px';
+    commentPill.style.left = left + 'px';
     commentPill.onclick = (e) => {
       e.stopPropagation();
       e.preventDefault();
