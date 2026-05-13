@@ -192,6 +192,98 @@
   .tdoc-modal button.primary { background: #1652f0; border-color: #1652f0; color: #fff; }
   .tdoc-modal button.primary:hover { background: #1245d0; }
   .tdoc-modal .status { color: #888; font-size: 13px; }
+
+  /* Default desktop styles for the comment-card column. Overridden by the
+     mobile media query below to become a bottom drawer. */
+  #tdoc-comment-layer { position: absolute; top: 0; left: 0; width: 100%;
+    pointer-events: none; z-index: 999996; }
+
+  /* Constrain text selection to actual text-bearing elements only. Without this,
+     selecting a multi-line paragraph extends the browser's blue selection bar
+     all the way to the container's right edge (into the page margin). Setting
+     user-select: none on the body baseline + re-enabling on text elements means
+     the live selection rectangle hugs the actual text. */
+  body { -webkit-user-select: none; user-select: none; }
+  body p, body h1, body h2, body h3, body h4, body h5, body h6,
+  body li, body blockquote, body pre, body code, body figcaption,
+  body th, body td, body dt, body dd, body summary,
+  body span, body em, body strong, body i, body b, body u, body s,
+  body a, body small, body sub, body sup, body mark,
+  body textarea, body input[type="text"], body input[type="search"],
+  body [contenteditable] {
+    -webkit-user-select: text; user-select: text; }
+
+  /* "More" dropdown trigger — declared here so the media query below can
+     reliably flip it to display: inline-flex on small screens. */
+  .tdoc-bar .tdoc-secondary-toggle { display: none; background: transparent;
+    border: 1px solid #2a2a2a; color: #ddd; padding: 5px 10px; border-radius: 6px;
+    font: inherit; cursor: pointer; align-items: center; }
+  .tdoc-bar .tdoc-secondary-toggle:hover { background: #1c1c1c; }
+  .tdoc-secondary-menu { position: absolute; top: 100%; right: 10px; background: #0f0f0f;
+    border: 1px solid #2a2a2a; border-radius: 8px; padding: 4px; min-width: 160px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000000; }
+  .tdoc-secondary-menu.open { display: block; }
+  .tdoc-secondary-menu button { display: block; width: 100%; text-align: left;
+    background: transparent; border: none; color: #ddd; padding: 8px 12px;
+    border-radius: 4px; font: 13px system-ui; cursor: pointer; }
+  .tdoc-secondary-menu button:hover { background: #1c1c1c; color: #fff; }
+
+  /* ============ RESPONSIVE: tablet + mobile ============
+     We don't pick a fixed breakpoint — JS measures the actual article width
+     and toggles body.tdoc-narrow when the margin column would overlap the
+     content. Narrow-mode styles below trigger off that class, which means
+     they kick in at the right moment regardless of the doc's own width. */
+  body.tdoc-narrow .tdoc-bar .slug { display: none; }
+  body.tdoc-narrow .tdoc-bar #tdoc-fork-btn,
+  body.tdoc-narrow .tdoc-bar #tdoc-home-btn { display: none; }
+  body.tdoc-narrow .tdoc-bar .tdoc-secondary-toggle { display: inline-flex; }
+  body.tdoc-narrow .tdoc-bar .title { font-size: 13px; max-width: 50vw;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.tdoc-narrow .tdoc-chip .name { display: none; }
+  body.tdoc-narrow .tdoc-chip { padding: 3px; }
+  body.tdoc-narrow .tdoc-chip.signin { padding: 6px 10px; font-size: 12px; }
+  body.tdoc-narrow .tdoc-chip.signin .name { display: inline; }
+  body.tdoc-narrow #tdoc-comment-layer { position: fixed; top: auto; left: 0; right: 0; bottom: 0;
+    max-height: 70vh; width: 100%; pointer-events: auto;
+    background: #fff; border-top: 1px solid #e5e5e5;
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.08);
+    transform: translateY(100%); transition: transform 0.2s;
+    overflow-y: auto; padding: 12px 12px 24px; box-sizing: border-box; z-index: 999998; }
+  body.tdoc-narrow #tdoc-comment-layer.open { transform: translateY(0); }
+  body.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle {
+    display: block; width: 36px; height: 4px; background: #ccc; border-radius: 2px;
+    margin: 0 auto 12px; cursor: grab; touch-action: none; user-select: none; }
+  body.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle:active { cursor: grabbing; }
+  body.tdoc-narrow .tdoc-margin-comment { position: static !important; width: auto !important;
+    left: auto !important; top: auto !important; margin-bottom: 10px;
+    transform: none !important; }
+  body.tdoc-narrow .tdoc-fab { position: fixed; bottom: 16px; right: 16px; z-index: 999997;
+    background: #1652f0; color: #fff; border: none; border-radius: 999px;
+    padding: 10px 16px; font: 13px system-ui; font-weight: 600;
+    box-shadow: 0 4px 16px rgba(22,82,240,0.35); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; }
+  body.tdoc-narrow .tdoc-fab:active { transform: scale(0.96); }
+  body.tdoc-narrow { padding-right: 0 !important; }
+  body.tdoc-narrow .tdoc-popup { width: calc(100vw - 24px); max-width: 320px; left: 12px !important; }
+  body.tdoc-narrow .tdoc-modal { width: calc(100vw - 32px); padding: 20px; }
+  body.tdoc-narrow .tdoc-modal .code { font-size: 20px; }
+  body.tdoc-narrow .tdoc-hover-outline { display: none; }
+  body.tdoc-narrow .tdoc-hover-hint { display: none; }
+  body.tdoc-narrow .tdoc-drag-marquee { display: none; }
+  body.tdoc-narrow .tdoc-emoji-picker { grid-template-columns: repeat(6, 36px); }
+  body.tdoc-narrow .tdoc-emoji-picker button { width: 36px; height: 36px; font-size: 20px; }
+  /* Hide the old ::before grab-bar that used to draw the handle — now a real
+     element so the drag handler can latch onto it. */
+
+  /* Phone-specific (single column, even smaller) */
+  @media (max-width: 480px) {
+    .tdoc-bar { padding: 0 10px; gap: 8px; }
+    .tdoc-bar button, .tdoc-bar .tdoc-menu-wrap > button { padding: 4px 8px; font-size: 12px; }
+    .tdoc-icon-btn span { display: none; }   /* Copy button: icon only */
+    .tdoc-emoji-picker { grid-template-columns: repeat(5, 40px); padding: 8px; }
+    .tdoc-emoji-picker button { width: 40px; height: 40px; font-size: 22px; }
+    .tdoc-emoji-picker button.tdoc-emoji-text { grid-column: span 5; }
+  }
   `;
   const style = document.createElement('style');
   style.textContent = css;
@@ -216,10 +308,35 @@
     </div>
     ${isPublished ? '<button id="tdoc-fork-btn">Fork</button>' : ''}
     <button id="tdoc-home-btn">All docs</button>
+    <button class="tdoc-secondary-toggle" id="tdoc-more-btn" aria-label="More" title="More">⋯</button>
     <span id="tdoc-identity-slot"></span>
+    <div class="tdoc-secondary-menu" id="tdoc-secondary-menu">
+      ${isPublished ? '<button data-action="fork">Fork</button>' : ''}
+      <button data-action="home">All docs</button>
+    </div>
   `;
   document.body.appendChild(bar);
   document.getElementById('tdoc-home-btn').onclick = () => location.href = '/';
+
+  // Secondary "..." menu for small screens
+  const moreBtn = document.getElementById('tdoc-more-btn');
+  const secMenu = document.getElementById('tdoc-secondary-menu');
+  if (moreBtn) {
+    moreBtn.onclick = (e) => { e.stopPropagation(); secMenu.classList.toggle('open'); };
+    secMenu.querySelectorAll('button').forEach(b => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        secMenu.classList.remove('open');
+        if (b.dataset.action === 'home') location.href = '/';
+        if (b.dataset.action === 'fork') location.href = `/d/${encodeURIComponent(slug)}/v/${version}/export`;
+      };
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#tdoc-more-btn') && !e.target.closest('#tdoc-secondary-menu')) {
+        secMenu.classList.remove('open');
+      }
+    });
+  }
 
   // Copy MD dropdown
   const copyBtn = document.getElementById('tdoc-copy-md-btn');
@@ -271,11 +388,79 @@
   renderIdentity();
 
   // --- floating margin comments (bdocs-style) ---
-  // Layer to hold all positioned comment cards.
+  // Layer to hold all positioned comment cards. The desktop positioning lives
+  // in the inline style; the @media (max-width: 1099px) rule overrides it for
+  // tablet + mobile to become a bottom drawer.
   const commentLayer = document.createElement('div');
   commentLayer.id = 'tdoc-comment-layer';
-  commentLayer.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; pointer-events: none; z-index: 999996;';
+  // Drag handle (visible only in narrow-mode via CSS). Tap or swipe-down to close.
+  const drawerHandle = document.createElement('div');
+  drawerHandle.className = 'tdoc-drawer-handle';
+  drawerHandle.setAttribute('aria-label', 'Drag down to close comments');
+  commentLayer.appendChild(drawerHandle);
   document.body.appendChild(commentLayer);
+
+  // Floating action button for narrow-mode — visible only when there are
+  // comments AND body.tdoc-narrow is set (CSS gates this).
+  const fab = document.createElement('button');
+  fab.className = 'tdoc-fab';
+  fab.style.display = 'none';
+  fab.innerHTML = '💬 <span id="tdoc-fab-count">0</span>';
+  fab.onclick = (e) => {
+    e.stopPropagation();
+    commentLayer.classList.toggle('open');
+  };
+  document.body.appendChild(fab);
+
+  // Tapping the handle closes the drawer.
+  drawerHandle.onclick = (e) => {
+    e.stopPropagation();
+    commentLayer.classList.remove('open');
+  };
+
+  // Swipe-down on the handle closes the drawer. Drag follows the finger; on
+  // release, if the user dragged >40px down, close; else snap back open.
+  let drag = null;
+  function dragStart(e) {
+    e.preventDefault();
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    drag = { y0: y, dy: 0 };
+    commentLayer.style.transition = 'none';
+  }
+  function dragMove(e) {
+    if (!drag) return;
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    const dy = Math.max(0, y - drag.y0);
+    drag.dy = dy;
+    commentLayer.style.transform = `translateY(${dy}px)`;
+  }
+  function dragEnd() {
+    if (!drag) return;
+    commentLayer.style.transition = '';
+    commentLayer.style.transform = '';
+    if (drag.dy > 40) commentLayer.classList.remove('open');
+    drag = null;
+  }
+  drawerHandle.addEventListener('touchstart', dragStart, { passive: false });
+  drawerHandle.addEventListener('touchmove',  dragMove,  { passive: true });
+  drawerHandle.addEventListener('touchend',   dragEnd);
+  drawerHandle.addEventListener('mousedown', (e) => {
+    dragStart(e);
+    document.addEventListener('mousemove', dragMove);
+    document.addEventListener('mouseup', function onUp() {
+      dragEnd();
+      document.removeEventListener('mousemove', dragMove);
+      document.removeEventListener('mouseup', onUp);
+    });
+  });
+
+  // Tapping outside the open drawer closes it (narrow-mode only behavior; on
+  // desktop the drawer isn't open so nothing to do).
+  document.addEventListener('click', (e) => {
+    if (!commentLayer.classList.contains('open')) return;
+    if (e.target.closest('#tdoc-comment-layer, .tdoc-fab, .tdoc-popup, .tdoc-modal-bg, .tdoc-emoji-picker')) return;
+    commentLayer.classList.remove('open');
+  });
 
   let activeComments = [];          // last-fetched open comments
   let anchorEls = new Map();        // comment.id -> mark element in DOM
@@ -599,6 +784,15 @@
 
   // Position each card vertically next to its anchor, stacking when they overlap.
   function repositionCards() {
+    // Skip absolute positioning when in narrow-mode — cards live in the bottom
+    // drawer in document order (CSS handles the layout).
+    if (document.body.classList.contains('tdoc-narrow')) {
+      for (const card of cardEls.values()) {
+        card.style.top = '';
+        card.style.left = '';
+      }
+      return;
+    }
     const margin = 12;
     const cardGap = 16;       // space between article right edge and the card column
     const cardWidth = 280;
@@ -651,17 +845,26 @@
     cardEls.get(id)?.classList.add('active');
   }
 
-  // Clicks outside any card / anchor / popup / bar clear the active state.
+  // Clicks outside any card / anchor / popup / bar:
+  //  - clear the active state on any selected comment
+  //  - clear any leftover text selection (browsers sometimes hold selection
+  //    across clicks, which manifests as a "permanent" highlight bar)
   document.addEventListener('click', (e) => {
     const t = e.target;
     if (!t || t.nodeType !== 1) return;
-    if (t.closest('.tdoc-margin-comment, .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-bar, .tdoc-popup, .tdoc-modal-bg, .tdoc-emoji-picker')) return;
+    if (t.closest('.tdoc-margin-comment, .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-bar, .tdoc-popup, .tdoc-modal-bg, .tdoc-emoji-picker, .tdoc-secondary-menu')) return;
     // Anchored elements (canvas/img/etc) also count as "anchor click" — leave active alone.
     for (const anchorEl of anchorEls.values()) {
       const target = anchorEl._targetEl || anchorEl;
       if (target && (target === t || (target.contains && target.contains(t)))) return;
     }
     setActiveComment(null);
+    // Clear any lingering text selection unless the click is itself producing
+    // a selection (selection collapsed selections have toString() === '').
+    const sel = window.getSelection();
+    if (sel && sel.toString().trim() === '' && sel.rangeCount > 0) {
+      sel.removeAllRanges();
+    }
   });
 
   function outlineElement(comment) {
@@ -697,7 +900,8 @@
       parent.normalize?.();
     });
     document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(el => el.remove());
-    commentLayer.innerHTML = '';
+    // Preserve the drawer handle; remove only card children.
+    for (const card of commentLayer.querySelectorAll('.tdoc-margin-comment')) card.remove();
     anchorEls.clear();
     cardEls.clear();
 
@@ -705,6 +909,11 @@
     const list = await r.json();
     activeComments = list.filter(c => c.status === 'open');
     document.body.classList.toggle('tdoc-has-comments', activeComments.length > 0);
+    // FAB (mobile/tablet): show when there are comments + viewport is small
+    const fabCount = document.getElementById('tdoc-fab-count');
+    if (fabCount) fabCount.textContent = activeComments.length;
+    // Recompute narrow-mode now that we know how many comments there are.
+    evaluateNarrowMode();
 
     for (const comment of activeComments) {
       let anchorEl = null;
@@ -747,7 +956,27 @@
     document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(o => o._reposition?.());
     repositionCards();
   }
-  window.addEventListener('resize', () => requestAnimationFrame(repositionAll));
+  // Determine whether we should be in narrow-mode (bottom drawer) by measuring
+  // the actual article width + the space needed by the margin column. This
+  // beats a fixed CSS breakpoint because docs come in many widths.
+  function evaluateNarrowMode() {
+    const CARD_WIDTH = 280;
+    const CARD_GAP = 16;
+    const SAFE_PAD = 24;
+    const contentRight = getContentRightEdge();
+    const need = CARD_WIDTH + CARD_GAP + SAFE_PAD;
+    const haveRoom = (window.innerWidth - contentRight) >= need;
+    // Also force narrow-mode on very small viewports regardless of measurement.
+    const isPhone = window.innerWidth < 700;
+    const narrow = isPhone || !haveRoom;
+    document.body.classList.toggle('tdoc-narrow', narrow);
+    fab.style.display = (narrow && activeComments.length > 0) ? 'inline-flex' : 'none';
+    if (!narrow) commentLayer.classList.remove('open');
+    return narrow;
+  }
+  window.addEventListener('resize', () => {
+    requestAnimationFrame(() => { evaluateNarrowMode(); repositionAll(); });
+  });
   window.addEventListener('scroll', () => requestAnimationFrame(repositionAll), { passive: true });
   if (window.ResizeObserver) {
     new ResizeObserver(() => repositionAll()).observe(document.body);
@@ -1010,17 +1239,30 @@
     const dx = e.pageX - dragState.x0;
     const dy = e.pageY - dragState.y0;
     const dist = Math.hypot(dx, dy);
-    if (!dragState.dragged && dist >= DRAG_THRESHOLD) {
-      dragState.dragged = true;
-      dragState.marquee = makeMarquee();
-    }
-    if (dragState.dragged && dragState.marquee) {
+    if (dist < DRAG_THRESHOLD) return;
+    dragState.dragged = true;
+    // Only show the marquee if the current drag rect actually touches an
+    // artifact. If the user is just selecting text in the margin / paragraph,
+    // leave the browser's native text-selection ghost alone.
+    const dragRect = {
+      left: Math.min(dragState.x0, e.pageX),
+      top: Math.min(dragState.y0, e.pageY),
+      right: Math.max(dragState.x0, e.pageX),
+      bottom: Math.max(dragState.y0, e.pageY),
+    };
+    const hit = findArtifactIntersecting(dragRect);
+    if (hit) {
+      if (!dragState.marquee) dragState.marquee = makeMarquee();
       const x = Math.min(dragState.x0, e.pageX);
       const y = Math.min(dragState.y0, e.pageY);
       dragState.marquee.style.left = x + 'px';
       dragState.marquee.style.top = y + 'px';
       dragState.marquee.style.width = Math.abs(dx) + 'px';
       dragState.marquee.style.height = Math.abs(dy) + 'px';
+    } else if (dragState.marquee) {
+      // User moved out of an artifact — hide marquee, let native text-select continue.
+      dragState.marquee.remove();
+      dragState.marquee = null;
     }
   }, true);
 
@@ -1030,8 +1272,6 @@
     dragState = null;
     if (marquee) marquee.remove();
     if (!dragged) return;
-    // Build the drag's page-coordinate rect, then find any commentable element
-    // it intersects.
     const dragRect = {
       left: Math.min(x0, e.pageX),
       top: Math.min(y0, e.pageY),
@@ -1039,7 +1279,7 @@
       bottom: Math.max(y0, e.pageY),
     };
     const el = findArtifactIntersecting(dragRect);
-    if (!el) return;   // drag in pure whitespace; do nothing
+    if (!el) return;   // drag in pure whitespace or over text — let native selection win
     e.preventDefault();
     e.stopPropagation();
     hideHoverOutline();
