@@ -155,6 +155,70 @@ are untouched.
 "$SKILL_DIR/bin/tdoc-unpublish" <slug>
 ```
 
+### `/tdoc onboard` — guided first-time setup
+
+You are walking a user through tdoc onboarding. The user might have nothing
+installed, or might be partway through. You **must** drive the flow from
+`bin/tdoc-doctor` JSON output, not assume state.
+
+**Algorithm:**
+
+1. Run `"$SKILL_DIR/bin/tdoc-doctor"` and parse the JSON. This is non-destructive.
+2. If `.ready_to_publish == true` AND `.published.ok == true` → tell the user
+   they are fully set up, and offer to run `/tdoc new <prompt>` or to test
+   publishing with a sample doc.
+3. If `.ready_to_publish == true` AND `.published.ok == false` → they have all
+   deps but haven't published yet. Offer to create a quick sample doc with
+   `/tdoc new` and then `/tdoc publish` it.
+4. Otherwise, walk through `.missing_steps` in order. For each step:
+   - **kind == "install"**: run the `cmd` for them via Bash (e.g. `npm i -g wrangler`,
+     `brew install jq`). After install, re-run `tdoc-doctor` to confirm.
+   - **kind == "login"**: explain that this opens a browser, then run the `cmd`.
+     `wrangler login` is interactive — print clear instructions and wait.
+   - **kind == "click"**: you cannot click for the user. Print the URL clearly
+     and tell them what to do ("Open this and click 'Enable R2'"). Then wait
+     for the user to say "done", then re-run `tdoc-doctor` to verify.
+5. After every step, re-run `tdoc-doctor` and continue from the new state.
+6. When `.ready_to_publish == true`, congratulate and offer to create + publish
+   a sample doc.
+
+**Important behavioral rules:**
+
+- NEVER skip the doctor check before suggesting a step. State changes between
+  steps (e.g. R2 takes a few seconds after enabling).
+- ALWAYS show the user what you're running. Print the JSON status if helpful.
+- If a "click" step doesn't take effect after the user says "done", offer to
+  re-check after waiting 10s (Cloudflare API can be slow to reflect changes).
+- The shared OAuth App client ID (`Ov23liZ1UAGOchvKPmlS`) is already baked
+  into the Worker — users do NOT register their own.
+
+### `/tdoc update` — check for updates and pull the latest
+
+Wraps `bin/tdoc-update`. Runs `git fetch + git merge --ff-only` against
+`origin/main` of `serenakeyitan/tdoc`.
+
+- `tdoc-update --check` → report-only, prints incoming commits without changing anything
+- `tdoc-update` → apply, with auto-stash of local edits
+- `tdoc-update --yes` → also redeploy the Worker so users see new overlay code
+
+```bash
+"$SKILL_DIR/bin/tdoc-update" --check    # see what's new
+"$SKILL_DIR/bin/tdoc-update"            # apply
+"$SKILL_DIR/bin/tdoc-update" --yes      # apply + redeploy worker
+```
+
+If the user has not yet `git clone`'d (the skill dir is not a git checkout),
+the script prints a clean instruction to re-clone.
+
+### `/tdoc doctor` — health check, no changes
+
+Prints the doctor JSON. Use this when the user reports a problem to localize
+which dep / Cloudflare resource is missing.
+
+```bash
+"$SKILL_DIR/bin/tdoc-doctor" | jq .
+```
+
 ## HTML generation rules
 
 - Self-contained: one HTML file. No imports, no external scripts (unless user explicitly wants e.g. D3 CDN).
