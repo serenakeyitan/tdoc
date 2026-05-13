@@ -262,21 +262,75 @@ which dep / Cloudflare resource is missing.
 - Prefer SVG over canvas for diagrams (commentable text). Use canvas for heavy simulations.
 - Default font stack: `system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`. Mono: `ui-monospace, "SF Mono", Menlo, monospace`.
 
+### Required container structure
+
+Wrap the doc content in a single container element with one of these selectors: **`.wrap`** (preferred), `main`, `article`, `.content`, or `.container`. The overlay relies on this to:
+- Detect article width for the responsive breakpoint
+- Anchor the article to the LEFT when there are comments (so growing/shrinking the window preserves the right-side comment column)
+- Calculate where comment cards land
+
+Example (always use this skeleton for new docs):
+
+```html
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    body { margin: 0; font: 17px/1.6 system-ui, sans-serif; color: #111; background: #fff; }
+    .wrap { max-width: 720px; padding: 56px 24px 80px; }
+    h1 { font-size: 32px; margin: 0 0 24px; }
+    p { margin: 0 0 16px; }
+    /* ... */
+  </style>
+</head><body>
+  <div class="wrap">
+    <!-- doc content here -->
+  </div>
+  <script>
+    /* any interactivity, inline */
+  </script>
+</body></html>
+```
+
+Note: the container should **not** have `margin: 0 auto`. The overlay will set its margins itself based on comment state. (If you write `margin: 0 auto`, the overlay overrides it with `!important`.)
+
+### Required: explicit body background
+
+Always set `body { background: #fff; }` (or whatever you want). The overlay reads the computed background to classify light vs dark mode for highlight colors. A doc without an explicit background falls back to transparent, which the overlay reads as light — fine for white pages, broken for any dark theme.
+
 ### Responsive defaults (REQUIRED)
 
 Every doc must work on mobile out of the box. The overlay injects defensive CSS for artifacts, but the doc itself should also be authored responsively:
 
 - **Always include** `<meta name="viewport" content="width=device-width, initial-scale=1">` in `<head>`. (The overlay injects this if you forget, but include it.)
-- **Use fluid widths**, not hardcoded pixels. Container: `max-width: 720px; width: 100%; margin: 0 auto; padding: 0 16px;`.
+- **Use fluid widths**, not hardcoded pixels. Container: `max-width: 720px; padding: 0 24px;` (no `margin: 0 auto` — overlay handles it).
 - **Canvas / SVG / images**: do NOT hardcode width=N height=M. Either:
   - Use `width="100%"` + CSS aspect-ratio (`aspect-ratio: 16/9`), or
-  - Use a `<div class="wrap">` with `max-width: 100%` and let the artifact scale.
+  - Use a wrapper with `max-width: 100%` and let the artifact scale.
   - For canvas, set `width` and `height` attributes for the drawing buffer but ALSO `style="max-width:100%;height:auto"` so it scales down on narrow screens. Recompute the drawing buffer on resize if needed.
 - **Tables**: wrap in `<div style="overflow-x:auto">` so they scroll instead of overflowing.
 - **Code blocks (`<pre>`)**: `max-width: 100%; overflow-x: auto;`.
 - **Test at 375px wide** in your head before claiming done. If anything overflows the viewport on a phone, fix it before writing meta.json.
 
 The overlay applies these as `:where()` defensive defaults so old docs degrade gracefully, but new docs should bake responsiveness in.
+
+### Don't conflict with the overlay's UI
+
+- **Don't define `button:hover { background: ... }`** globally — it will override the overlay's Comment pill on artifacts. Scope hover rules to your own buttons (e.g. `.my-btn:hover`, or `.wrap button:hover`).
+- **Don't use these ids/classes** in your doc — they're reserved by the overlay: `tdoc-*`, `#tdoc-*`, and any class starting with `tdoc-`.
+- **Don't position-fixed elements at the top** — the overlay's 44px top bar lives there.
+- **Don't use a footer at the bottom** — the overlay injects its own.
+
+### Comment anchor stability (important for `/tdoc edit`)
+
+When a user comments on an artifact, the comment stores a CSS selector for that element (built from the element's id if present, otherwise its tag + nth-of-type path). For comments to **survive `/tdoc edit` regenerations**, anchored elements should have **stable selectors across versions**:
+
+- **Give every commentable artifact a deterministic `id`** (e.g. `<canvas id="life">`, `<svg id="diagram-a">`, `<img id="hero">`). The selector becomes `#life`, immune to reordering.
+- **Don't change ids between versions** unless the artifact's purpose has changed.
+- **Don't add/remove sibling elements** of similar tags above an unidentified artifact — that shifts its nth-of-type.
+- When you DO change an anchored element semantically, accept that its comments may become "unanchored" — they'll still render in the margin under an "unanchored" header so they're not lost.
 
 ## Comment anchoring
 
