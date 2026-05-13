@@ -801,9 +801,24 @@
       .map(c => ({ c, mark: state.anchorMarks.get(c.id), card: state.cardEls.get(c.id) }))
       .filter(x => x.mark && x.card && (x.mark.ranges?.[0] || x.mark.el))
       .map(x => {
+        // Text anchors are line-height tall — align to top.
+        // Element anchors (img/canvas/video) are big blocks — anchor to the
+        // VERTICAL CENTER of the element minus half the card height. This
+        // matches user mental model: the card sits beside the *thing* it
+        // comments on, not floating above it.
         let top;
-        if (x.mark.ranges?.[0]) top = x.mark.ranges[0].getBoundingClientRect().top;
-        else top = x.mark.el.getBoundingClientRect().top;
+        if (x.mark.ranges?.[0]) {
+          top = x.mark.ranges[0].getBoundingClientRect().top;
+        } else if (x.mark.kind === 'element' || x.mark.targetEl) {
+          const targetRect = (x.mark.targetEl || x.mark.el).getBoundingClientRect();
+          const cardH = x.card.offsetHeight || 100;
+          // Center the card vertically against the element. Clamp to the
+          // element's top in case the element is shorter than the card.
+          const centerY = targetRect.top + targetRect.height / 2 - cardH / 2;
+          top = Math.max(targetRect.top, centerY);
+        } else {
+          top = x.mark.el.getBoundingClientRect().top;
+        }
         return { ...x, top: top + window.scrollY };
       })
       .sort((a, b) => a.top - b.top);
@@ -881,9 +896,11 @@
     const mark = state.anchorMarks.get(id);
     if (!mark) return;
     let anchorRect = null;
+    // Prefer the underlying TARGET ELEMENT (canvas/img/video etc) over the
+    // overlay outline div — same rect, but more semantically correct.
     if (mark.ranges?.[0]) anchorRect = mark.ranges[0].getBoundingClientRect();
-    else if (mark.el?.getBoundingClientRect) anchorRect = mark.el.getBoundingClientRect();
     else if (mark.targetEl?.getBoundingClientRect) anchorRect = mark.targetEl.getBoundingClientRect();
+    else if (mark.el?.getBoundingClientRect) anchorRect = mark.el.getBoundingClientRect();
     if (!anchorRect) return;
 
     // We consider the anchor "comfortably visible" if its top is between the
