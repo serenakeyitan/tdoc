@@ -928,14 +928,9 @@
       return;
     }
     const margin = 12, cardGap = 16, cardWidth = 280;
-    // Right-anchor the card column to the viewport's right edge (with a small
-    // safe margin). As the user expands the window, cards shift rightward
-    // and the right-side panel visually grows. As the window shrinks, cards
-    // approach the article's right edge until narrow-mode kicks in.
-    // We clamp so cards never overlap the article body.
-    const desiredLeft = window.scrollX + window.innerWidth - cardWidth - 12;
-    const minLeft = getContentRightEdge() + cardGap;
-    let cardLeft = Math.max(minLeft, desiredLeft);
+    let cardLeft = getContentRightEdge() + cardGap;
+    const maxLeft = window.scrollX + window.innerWidth - cardWidth - 12;
+    if (cardLeft > maxLeft) cardLeft = maxLeft;
 
     const anchored = state.activeComments
       .map(c => ({ c, mark: state.anchorMarks.get(c.id), card: state.cardEls.get(c.id) }))
