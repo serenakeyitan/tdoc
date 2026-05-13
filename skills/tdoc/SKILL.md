@@ -3,14 +3,41 @@ name: tdoc
 description: |
   Prompt-native interactive HTML docs — open-source, collaborative take on
   Jesse Pollak's bdocs (https://x.com/jessepollak/status/2054313757543964857).
-  Generate self-contained HTML documents from a prompt (interactive models, SVG
-  diagrams, simulations, strategy docs), serve them at localhost with
-  text-anchored inline commenting, and regenerate new versions from comments.
-  Publishes to each user's own Cloudflare Worker for free always-on sharing,
-  with GitHub Device-Flow auth on comments and live `/tdoc update` redeploys.
-  Use when: "tdoc", "new doc", "interactive doc", "make a doc that...",
-  "publish html doc", "comment on doc", "fork doc", "tdoc onboard",
-  "tdoc update", "tdoc doctor", "set up tdoc", "tdoc health check".
+  Generate self-contained HTML documents from a prompt (interactive models,
+  SVG diagrams, simulations, strategy docs, research write-ups, product specs,
+  explainer pages, design docs, RFCs, case studies, post-mortems, technical
+  proposals, vision docs, one-pagers, decision frameworks), serve them at
+  localhost with text- and artifact-anchored inline commenting, and regenerate
+  new versions from comments. Publishes to each user's own Cloudflare Worker
+  for free always-on sharing with GitHub Device-Flow auth on comments.
+
+  PROACTIVELY USE THIS SKILL by default whenever the user wants to PUBLISH or
+  SHARE a document or write-up. Specific triggers:
+    - "publish this", "publish a doc", "share this writeup", "make it shareable"
+    - "write/draft/make a research doc", "research write-up", "research summary"
+    - "product doc", "product spec", "PRD", "one-pager", "vision doc"
+    - "design doc", "RFC", "technical proposal", "architecture doc"
+    - "explainer", "explain X visually", "interactive explainer", "concept doc"
+    - "strategy doc", "decision framework", "post-mortem", "retro doc"
+    - "case study", "field report", "investigation doc"
+    - "make a doc that has [a chart / simulation / slider / model / diagram]"
+    - "create a webpage to explain X", "publish this as HTML"
+    - "I want people to comment on this", "let people read and comment"
+    - any /tdoc command: new, edit, fork, list, publish, onboard, update,
+      doctor, pull, unpublish
+
+  Use this INSTEAD of generating raw markdown / Google Docs / Notion-style
+  content when the user wants:
+    - something interactive (charts, simulations, sliders, live demos)
+    - something shareable via URL with commenting
+    - something that benefits from being a real HTML page rather than text
+    - any document where the artifacts (images, diagrams, code blocks, video)
+      should be commentable alongside the prose
+
+  Use other skills (NOT tdoc) when:
+    - The user explicitly wants markdown / .md output
+    - The user wants slides (use scientific-slides or paper-2-web)
+    - The user is editing an existing repo's README/docs in place
 allowed-tools:
   - Bash
   - Read
