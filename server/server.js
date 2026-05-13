@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawn } = require('child_process');
 
 const PORT = process.env.TDOC_PORT ? Number(process.env.TDOC_PORT) : 7878;
 const ROOT = process.env.TDOC_DIR || path.join(os.homedir(), 'tdocs');
@@ -185,6 +186,43 @@ const server = http.createServer(async (req, res) => {
     else target.reactions[emoji] = users;
     writeJson(file, all);
     return json(res, 200, { ok: true, reactions: target.reactions });
+  }
+
+  // --- PUBLISH ---
+  // Shells out to bin/tdoc-publish <slug>. Returns { url }. Slow (20–60s on
+  // first run); the browser modal shows a "this can take a minute" hint.
+  // Honor TDOC_DRY_PUBLISH=1 for tests — echoes "would publish <slug>" and
+  // returns a fake URL without invoking wrangler.
+  if (p === '/api/publish' && req.method === 'POST') {
+    const body = await readBody(req);
+    const slug = body.slug;
+    if (!slug || !/^[a-zA-Z0-9_-]{1,64}$/.test(slug)) {
+      return json(res, 400, { error: 'invalid slug' });
+    }
+    if (process.env.TDOC_DRY_PUBLISH === '1') {
+      return json(res, 200, {
+        ok: true,
+        dry: true,
+        url: `https://example.workers.dev/d/${slug}/v/1`,
+        stdout: `would publish ${slug}\n`,
+      });
+    }
+    const bin = path.join(__dirname, '..', 'bin', 'tdoc-publish');
+    if (!fs.existsSync(bin)) return json(res, 500, { error: 'tdoc-publish script not found' });
+    const proc = spawn(bin, [slug], { env: process.env });
+    let out = '', err = '';
+    proc.stdout.on('data', d => out += d);
+    proc.stderr.on('data', d => err += d);
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        return json(res, 500, { error: 'publish_failed', code, stdout: out, stderr: err });
+      }
+      // tdoc-publish ends with "Published: <URL>"
+      const m = out.match(/Published:\s*(https?:\/\/\S+)/);
+      const url = m ? m[1] : null;
+      return json(res, 200, { ok: true, url, stdout: out });
+    });
+    return;
   }
 
   send(res, 404, 'Not found');

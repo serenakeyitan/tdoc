@@ -24,6 +24,7 @@
   const mode = cfg.mode || 'local';
   const isPublished = mode === 'published';
   const isFork = mode === 'fork';
+  const isLocal = mode === 'local';
   // Fork mode renders the doc read-only with comments mirrored from the
   // embedded #tdoc-fork-comments JSON. No /api calls, no auth, no publish.
   // The original published slug is in cfg.originalSlug so we can label it.
@@ -228,7 +229,7 @@
   .tdoc-modal .status { color: #888; font-size: 13px; }
 
   /* Narrow mode (drawer + FAB) */
-  body.tdoc-narrow .tdoc-bar .slug, body.tdoc-narrow .tdoc-bar #tdoc-fork-btn, body.tdoc-narrow .tdoc-bar #tdoc-home-btn, body.tdoc-narrow .tdoc-bar #tdoc-saveas-btn { display: none; }
+  body.tdoc-narrow .tdoc-bar .slug, body.tdoc-narrow .tdoc-bar #tdoc-fork-btn, body.tdoc-narrow .tdoc-bar #tdoc-home-btn, body.tdoc-narrow .tdoc-bar #tdoc-publish-btn, body.tdoc-narrow .tdoc-bar #tdoc-share-btn, body.tdoc-narrow .tdoc-bar #tdoc-saveas-btn { display: none; }
   body.tdoc-narrow .tdoc-bar .tdoc-secondary-toggle { display: inline-flex; }
   body.tdoc-narrow .tdoc-bar .title { font-size: 13px; max-width: 50vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.tdoc-narrow .tdoc-chip .name { display: none; }
@@ -376,6 +377,16 @@
   const slugLabel = isFork
     ? `fork of ${cfg.originalSlug || slug} · v${version}`
     : `${slug} · v${version}${isPublished ? ' · published' : ''}`;
+  // Publish/Share button: "Publish" in local, "Share" in published, hidden in fork.
+  const publishShareBtnHtml = isFork ? '' : (isPublished
+    ? `<button id="tdoc-share-btn" class="tdoc-icon-btn" title="Share link" aria-label="Share">
+         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+         <span>Share</span>
+       </button>`
+    : `<button id="tdoc-publish-btn" class="tdoc-icon-btn" title="Publish to your Worker" aria-label="Publish">
+         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg>
+         <span>Publish</span>
+       </button>`);
   // Fork button: shown only on published docs. Fork mode shows "Save copy" instead.
   const forkBtnHtml = isPublished
     ? '<button id="tdoc-fork-btn">Fork</button>'
@@ -384,6 +395,7 @@
     <span class="title" id="tdoc-title">tdoc</span>
     <span class="slug">${slugLabel}</span>
     <span class="spacer"></span>
+    ${publishShareBtnHtml}
     <div class="tdoc-menu-wrap">
       <button id="tdoc-copy-md-btn" class="tdoc-icon-btn" title="Copy as Markdown" aria-label="Copy as Markdown">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -399,7 +411,8 @@
     <button class="tdoc-secondary-toggle" id="tdoc-more-btn" aria-label="More" title="More">⋯</button>
     <span id="tdoc-identity-slot"></span>
     <div class="tdoc-secondary-menu" id="tdoc-secondary-menu">
-      ${isPublished ? '<button data-action="fork">Fork</button>' : ''}
+      ${isPublished ? '<button data-action="share">Share</button><button data-action="fork">Fork</button>' : ''}
+      ${isLocal ? '<button data-action="publish">Publish</button>' : ''}
       ${isFork ? '<button data-action="saveas">Save copy</button>' : ''}
       <button data-action="home">All docs</button>
     </div>
@@ -424,19 +437,26 @@
     document.body.appendChild(f);
     setTimeout(() => f.remove(), 8000);
   }
-  function downloadFork() {
-    const a = document.createElement('a');
-    a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
-    a.download = `${slug}-v${version}-fork.html`;
-    document.body.appendChild(a); a.click(); a.remove();
-  }
   if (isPublished) {
     const fb = document.getElementById('tdoc-fork-btn');
     if (fb) fb.onclick = forkAndDownload;
+    const sb = document.getElementById('tdoc-share-btn');
+    if (sb) sb.onclick = (e) => { e.stopPropagation(); showShareModal(); };
+  }
+  if (isLocal) {
+    const pb = document.getElementById('tdoc-publish-btn');
+    if (pb) pb.onclick = (e) => { e.stopPropagation(); showPublishModal(); };
   }
   if (isFork) {
+    // Save As: same download as Fork, but from within fork mode (no /fork open
+    // since we ARE the fork tab already).
     const sa = document.getElementById('tdoc-saveas-btn');
-    if (sa) sa.onclick = downloadFork;
+    if (sa) sa.onclick = () => {
+      const a = document.createElement('a');
+      a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
+      a.download = `${slug}-v${version}-fork.html`;
+      document.body.appendChild(a); a.click(); a.remove();
+    };
   }
 
   const copyBtn = document.getElementById('tdoc-copy-md-btn');
@@ -459,7 +479,14 @@
       secMenu.classList.remove('open');
       if (b.dataset.action === 'home') location.href = '/';
       if (b.dataset.action === 'fork') forkAndDownload();
-      if (b.dataset.action === 'saveas') downloadFork();
+      if (b.dataset.action === 'share') showShareModal();
+      if (b.dataset.action === 'publish') showPublishModal();
+      if (b.dataset.action === 'saveas') {
+        const a = document.createElement('a');
+        a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
+        a.download = `${slug}-v${version}-fork.html`;
+        document.body.appendChild(a); a.click(); a.remove();
+      }
     };
   });
 
@@ -1074,6 +1101,100 @@
     const m = document.getElementById('tdoc-device-modal');
     if (m) m.remove();
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  // ========== Publish / Share modals ==========
+  function closeAuxModal() {
+    const m = document.getElementById('tdoc-aux-modal');
+    if (m) m.remove();
+  }
+  function showPublishModal() {
+    closeAuxModal();
+    const bg = document.createElement('div');
+    bg.className = 'tdoc-modal-bg';
+    bg.id = 'tdoc-aux-modal';
+    bg.innerHTML = `
+      <div class="tdoc-modal" data-state="idle">
+        <h3>Publish this doc</h3>
+        <p>We'll deploy this to your Cloudflare Worker so anyone with the link can read it. GitHub sign-in is required for commenting.</p>
+        <div class="step"><span class="n">·</span><span>Slug: <code id="tdoc-pub-slug">${escapeHtml(slug)}</code></span></div>
+        <div class="status" id="tdoc-pub-status" style="margin-top:10px;display:none;"></div>
+        <div id="tdoc-pub-result" style="margin-top:10px;display:none;">
+          <div class="code" style="font-size:14px;letter-spacing:0;text-align:left;" id="tdoc-pub-url"></div>
+          <div class="actions" style="justify-content:flex-start;gap:8px;">
+            <button class="primary" id="tdoc-pub-copy">Copy link</button>
+            <button id="tdoc-pub-open">View live →</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="tdoc-pub-cancel">Cancel</button>
+          <button class="primary" id="tdoc-pub-go">Publish</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bg);
+    document.getElementById('tdoc-pub-cancel').onclick = closeAuxModal;
+    document.getElementById('tdoc-pub-go').onclick = async () => {
+      const status = document.getElementById('tdoc-pub-status');
+      const go = document.getElementById('tdoc-pub-go');
+      status.style.display = 'block';
+      status.textContent = 'Publishing — this can take 20–60s on first run…';
+      go.disabled = true;
+      try {
+        const r = await fetch('/api/publish', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug })
+        });
+        const data = await r.json();
+        if (!r.ok || data.error) {
+          status.textContent = 'Failed: ' + (data.error || data.message || 'unknown');
+          go.disabled = false;
+          return;
+        }
+        const url = data.url;
+        status.style.display = 'none';
+        const result = document.getElementById('tdoc-pub-result');
+        result.style.display = 'block';
+        document.getElementById('tdoc-pub-url').textContent = url;
+        document.getElementById('tdoc-pub-copy').onclick = () => navigator.clipboard?.writeText(url);
+        document.getElementById('tdoc-pub-open').onclick = () => window.open(url, '_blank');
+        document.getElementById('tdoc-pub-go').style.display = 'none';
+        document.getElementById('tdoc-pub-cancel').textContent = 'Done';
+      } catch (e) {
+        status.textContent = 'Failed: ' + e.message;
+        go.disabled = false;
+      }
+    };
+  }
+  function showShareModal() {
+    closeAuxModal();
+    const url = `${location.origin}/d/${encodeURIComponent(slug)}/v/${version}`;
+    const bg = document.createElement('div');
+    bg.className = 'tdoc-modal-bg';
+    bg.id = 'tdoc-aux-modal';
+    bg.innerHTML = `
+      <div class="tdoc-modal">
+        <h3>Share this doc</h3>
+        <div class="code" id="tdoc-share-url" style="font-size:14px;letter-spacing:0;text-align:left;cursor:copy;">${escapeHtml(url)}</div>
+        <div class="actions" style="justify-content:flex-start;gap:8px;margin-top:0;margin-bottom:10px;">
+          <button class="primary" id="tdoc-share-copy">Copy link</button>
+          <button id="tdoc-share-open">Open in new tab</button>
+        </div>
+        <p style="font-size:13px;color:#666;">Anyone with this link can read. To comment, they sign in with GitHub.</p>
+        <div style="border-top:1px solid #eee;padding-top:12px;margin-top:12px;">
+          <p style="margin:0 0 6px;color:#c33;font-size:13px;"><b>Unpublish</b></p>
+          <p style="margin:0 0 6px;font-size:12px;color:#666;">Unpublish requires the upload token, which only lives on your laptop. Run this locally:</p>
+          <div class="code" style="font-size:13px;letter-spacing:0;text-align:left;cursor:copy;" id="tdoc-share-unpub">/tdoc unpublish ${escapeHtml(slug)}</div>
+        </div>
+        <div class="actions"><button id="tdoc-share-close">Close</button></div>
+      </div>`;
+    document.body.appendChild(bg);
+    document.getElementById('tdoc-share-close').onclick = closeAuxModal;
+    document.getElementById('tdoc-share-copy').onclick = () => navigator.clipboard?.writeText(url);
+    document.getElementById('tdoc-share-open').onclick = () => window.open(url, '_blank');
+    document.getElementById('tdoc-share-url').onclick = () => navigator.clipboard?.writeText(url);
+    document.getElementById('tdoc-share-unpub').onclick = (e) => {
+      navigator.clipboard?.writeText(e.currentTarget.textContent);
+    };
   }
   async function pollDevice(device_code) {
     try {

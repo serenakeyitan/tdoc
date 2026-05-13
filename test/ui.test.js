@@ -299,19 +299,55 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     await page.waitForTimeout(150);
   });
 
-  // ----- Fork mode: renderable URL is read-only -----
+  // ----- Feature: Share button on published view -----
+  await t('Share button visible on published view (left of Copy)', async () => {
+    const share = await page.$('#tdoc-share-btn');
+    if (!share) throw new Error('no #tdoc-share-btn on published doc');
+    const text = await share.textContent();
+    if (!text.includes('Share')) throw new Error(`label was "${text}"`);
+  });
+
+  await t('Click Share opens modal with URL + Copy + Open buttons', async () => {
+    await page.click('#tdoc-share-btn');
+    await page.waitForSelector('#tdoc-aux-modal', { timeout: 2000 });
+    const url = await page.$eval('#tdoc-share-url', el => el.textContent.trim());
+    if (!url.startsWith('http')) throw new Error(`url didn't look right: "${url}"`);
+    const copyBtn = await page.$('#tdoc-share-copy');
+    const openBtn = await page.$('#tdoc-share-open');
+    if (!copyBtn || !openBtn) throw new Error('Share modal missing Copy/Open buttons');
+    const unpub = await page.$('#tdoc-share-unpub');
+    if (!unpub) throw new Error('Share modal missing unpublish hint');
+    const unpubText = await unpub.textContent();
+    if (!unpubText.includes('/tdoc unpublish')) throw new Error(`unpublish text was "${unpubText}"`);
+  });
+
+  await t('Share modal closes', async () => {
+    await page.click('#tdoc-share-close');
+    await page.waitForTimeout(150);
+    const m = await page.$('#tdoc-aux-modal');
+    if (m) throw new Error('Share modal did not close');
+  });
+
+  // ----- Feature: Fork mode renderable URL -----
   await t('Fork URL loads in fork mode (read-only, comments mirrored)', async () => {
     const forkPage = await ctx.newPage();
     const u = URL.replace(/\/?$/, '') + '/fork';
     await forkPage.goto(u, { waitUntil: 'networkidle' });
+    // Title slug should say "fork of …"
     const slug = await forkPage.$eval('.tdoc-bar .slug', el => el.textContent);
     if (!slug.toLowerCase().includes('fork of')) throw new Error(`expected "fork of" in slug, got "${slug}"`);
+    // Save button should be present (in narrow mode it may be hidden; we're at 1400px)
     const saveBtn = await forkPage.$('#tdoc-saveas-btn');
     if (!saveBtn) throw new Error('no #tdoc-saveas-btn in fork mode');
+    // No reply form should exist (read-only)
     const replyForm = await forkPage.$('.tdoc-reply-form');
     if (replyForm) throw new Error('reply form present in fork mode (should be read-only)');
+    // No Reply toggle either
     const replyToggle = await forkPage.$('.tdoc-reply-toggle');
     if (replyToggle) throw new Error('Reply button present in fork mode');
+    // Share button hidden
+    const shareBtn = await forkPage.$('#tdoc-share-btn');
+    if (shareBtn) throw new Error('Share button visible in fork mode');
     await forkPage.close();
   });
 
