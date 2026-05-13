@@ -1397,9 +1397,9 @@
           e.preventDefault(); e.stopPropagation();
           hideHoverUI();
           openPopup({ kind: 'element', selector: elementSelector(el), label: elementLabel(el), _el: el }, el.getBoundingClientRect());
+          return;
         }
-        // Dragged-but-no-artifact: do nothing (don't pop a text-selection popup).
-        return;
+        // Dragged but no artifact hit — likely a text selection. Fall through.
       }
     }
     // Not a drag — text-selection popup behavior.
