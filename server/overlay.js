@@ -363,6 +363,40 @@
   body.tdoc-doc-dark .tdoc-modal code { background: #0f0f0f; color: #e5e5e5; }
   body.tdoc-doc-dark.tdoc-narrow #tdoc-comment-layer { background: #0f0f0f; border-top-color: #2a2a2a; box-shadow: 0 -4px 24px rgba(0,0,0,0.6); }
   body.tdoc-doc-dark.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { background: #444; }
+
+  /* User-forced DARK theme (top-bar toggle, state='dark').
+     Filter-inverts the doc body so it's readable on dark, while counter-
+     inverting media so images / videos / canvas / svg keep their colors.
+     The overlay chrome lives outside body (or already styled via .tdoc-doc-dark)
+     so we exclude it from the filter via a tdoc-no-invert hook. */
+  html.tdoc-force-dark body { filter: invert(1) hue-rotate(180deg); background: #fff; }
+  html.tdoc-force-dark body img,
+  html.tdoc-force-dark body video,
+  html.tdoc-force-dark body iframe,
+  html.tdoc-force-dark body canvas,
+  html.tdoc-force-dark body svg,
+  html.tdoc-force-dark body picture,
+  html.tdoc-force-dark body .tdoc-no-invert { filter: invert(1) hue-rotate(180deg); }
+  /* Overlay chrome must NOT be inverted — it has its own dark theme via
+     body.tdoc-doc-dark (which we also set when force-dark is on). */
+  html.tdoc-force-dark .tdoc-bar,
+  html.tdoc-force-dark .tdoc-margin-comment,
+  html.tdoc-force-dark .tdoc-popup,
+  html.tdoc-force-dark .tdoc-modal,
+  html.tdoc-force-dark .tdoc-modal-bg,
+  html.tdoc-force-dark #tdoc-comment-layer,
+  html.tdoc-force-dark .tdoc-footer,
+  html.tdoc-force-dark .tdoc-emoji-picker,
+  html.tdoc-force-dark .tdoc-secondary-menu,
+  html.tdoc-force-dark .tdoc-menu,
+  html.tdoc-force-dark .tdoc-comment-pill,
+  html.tdoc-force-dark .tdoc-hover-outline,
+  html.tdoc-force-dark .tdoc-element-outline,
+  html.tdoc-force-dark .tdoc-fab { filter: none; }
+
+  /* User-forced LIGHT theme: just ensure the overlay stays in light mode
+     even if the painted background is dark. classifyDocTheme is skipped. */
+  html.tdoc-force-light body.tdoc-doc-dark { /* no-op marker — JS removes the class */ }
   `;
   const style = document.createElement('style');
   style.textContent = css;
@@ -445,6 +479,9 @@
     <span class="title" id="tdoc-title">tdoc</span>
     <span class="slug">${slugLabel}</span>
     <span class="spacer"></span>
+    <button id="tdoc-theme-btn" class="tdoc-icon-btn" title="Toggle theme (auto / light / dark)" aria-label="Toggle theme">
+      <svg id="tdoc-theme-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><!-- icon set in JS --></svg>
+    </button>
     ${publishShareBtnHtml}
     <div class="tdoc-menu-wrap">
       <button id="tdoc-copy-md-btn" class="tdoc-icon-btn" title="Copy as Markdown" aria-label="Copy as Markdown">
@@ -464,10 +501,51 @@
       ${isPublished ? '<button data-action="share">Share</button><button data-action="fork">Fork</button>' : ''}
       ${isLocal ? '<button data-action="publish">Publish</button>' : ''}
       ${isFork ? '<button data-action="saveas">Save copy</button>' : ''}
+      <button data-action="theme">Theme</button>
       <button data-action="home">All docs</button>
     </div>
   `;
   document.body.appendChild(bar);
+
+  // ========== Theme toggle (auto / light / dark) ==========
+  // Three states stored in localStorage:
+  //   auto  → follow the doc's painted background (current default)
+  //   light → force light overlay; counter any doc darkness
+  //   dark  → force dark overlay + filter-invert the doc body so it's readable
+  const THEME_KEY = 'tdoc.theme';
+  function getTheme() { try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch { return 'auto'; } }
+  function setTheme(t) { try { localStorage.setItem(THEME_KEY, t); } catch {} applyTheme(t); }
+  const SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>';
+  const MOON = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+  const AUTO = '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>';
+  function applyTheme(t) {
+    const root = document.documentElement;
+    root.classList.toggle('tdoc-force-light', t === 'light');
+    root.classList.toggle('tdoc-force-dark', t === 'dark');
+    // Recompute the body.tdoc-doc-dark class — used by all overlay dark-mode rules.
+    // In auto: follow painted background. In light: never. In dark: always.
+    if (t === 'auto') classifyDocTheme();
+    else document.body.classList.toggle('tdoc-doc-dark', t === 'dark');
+    // Swap the icon to reflect current state
+    const icon = document.getElementById('tdoc-theme-icon');
+    if (icon) {
+      icon.innerHTML = t === 'light' ? SUN : t === 'dark' ? MOON : AUTO;
+      const btn = document.getElementById('tdoc-theme-btn');
+      if (btn) btn.title = `Theme: ${t} (click to cycle)`;
+    }
+  }
+  function cycleTheme() {
+    const order = ['auto', 'light', 'dark'];
+    const cur = getTheme();
+    const next = order[(order.indexOf(cur) + 1) % order.length];
+    setTheme(next);
+  }
+  // Initialize: read stored choice, apply.
+  applyTheme(getTheme());
+  document.getElementById('tdoc-theme-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cycleTheme();
+  });
 
   const titleEl = document.querySelector('title');
   if (titleEl && titleEl.textContent) document.getElementById('tdoc-title').textContent = titleEl.textContent;
@@ -557,6 +635,7 @@
       if (b.dataset.action === 'fork') forkAndDownload();
       if (b.dataset.action === 'share') showShareModal();
       if (b.dataset.action === 'publish') showPublishModal();
+      if (b.dataset.action === 'theme') cycleTheme();
       if (b.dataset.action === 'saveas') {
         const a = document.createElement('a');
         a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
