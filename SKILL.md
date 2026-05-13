@@ -1,12 +1,13 @@
 ---
 name: tdoc
 description: |
-  Prompt-native interactive HTML docs — your local bdocs clone. Generate
-  self-contained HTML documents from a prompt (interactive models, SVG
+  Prompt-native interactive HTML docs — open-source, collaborative take on
+  Jesse Pollak's bdocs (https://x.com/jessepollak/status/2054313757543964857).
+  Generate self-contained HTML documents from a prompt (interactive models, SVG
   diagrams, simulations, strategy docs), serve them at localhost with
   text-anchored inline commenting, and regenerate new versions from comments.
-  Also publishes to Cloudflare Workers for free always-on sharing with GitHub
-  Device-Flow auth on comments.
+  Publishes to each user's own Cloudflare Worker for free always-on sharing,
+  with GitHub Device-Flow auth on comments and live `/tdoc update` redeploys.
   Use when: "tdoc", "new doc", "interactive doc", "make a doc that...",
   "publish html doc", "comment on doc", "fork doc", "tdoc onboard",
   "tdoc update", "tdoc doctor", "set up tdoc", "tdoc health check".
@@ -20,9 +21,12 @@ allowed-tools:
 
 # tdoc — Prompt-native HTML documents
 
-Local clone of bdocs. Docs are HTML build artifacts, not files the user maintains.
-Authoring interface is a prompt. Every edit creates a new version. Text-anchored
-comments are captured in the browser and used to regenerate.
+Open-source, collaborative take on Jesse Pollak's bdocs. Docs are HTML build
+artifacts, not files the user maintains. Authoring interface is a prompt.
+Every edit creates a new version. Comments anchor to highlighted text or to
+artifacts (images, SVG, canvas, video) and are used to regenerate the next
+version. Each user publishes to their own Cloudflare Worker for free always-on
+sharing, with GitHub auth gating comments.
 
 ## Storage layout
 

@@ -1,14 +1,23 @@
 # tdoc
 
-Prompt-native interactive HTML documents — a local clone of [bdocs](https://bdocs.cbhq.net). Generate self-contained HTML docs from a prompt, serve them locally with text- and artifact-anchored inline commenting, and publish to your own Cloudflare Worker for free always-on sharing.
+Prompt-native interactive HTML documents. Generate self-contained HTML docs from a prompt, serve them locally with text- and artifact-anchored inline commenting, and publish to your own Cloudflare Worker for free always-on sharing.
 
 This is a [Claude Code](https://claude.com/claude-code) skill. After installing, you invoke it from inside Claude Code with `/tdoc <command>`.
 
+## Inspiration
+
+Inspired by [**bdocs**](https://x.com/jessepollak/status/2054313757543964857) by [Jesse Pollak](https://x.com/jessepollak) — Coinbase's internal tool for prompt-native docs that demonstrated how HTML can be a "powerful interface" for AI-generated documents. `tdoc` is an **open-source, collaborative take** on that idea:
+
+- **Open** — MIT-licensed, anyone can clone and run it
+- **Collaborative** — each user publishes to *their own* Cloudflare Worker, gets a real shareable URL, and viewers sign in with GitHub to comment on text or artifacts (images, SVG, canvas, video). Threaded replies, emoji reactions.
+- **Always-on** — published docs live on Cloudflare's edge (free tier). No laptop needed.
+- **Live-updatable** — `/tdoc update` pulls the latest skill code; `--yes` redeploys your Worker so commenters get the new UI immediately.
+
 ## Why
 
-The best documents are often interactive HTML — live models with sliders, SVG decision frameworks, simulations that explain themselves. But there's no home for them: GitHub Pages and local files are hard to share, comment on, or iterate. `tdoc` gives these docs a home.
+The best documents are often interactive HTML — live models with sliders, SVG decision frameworks, simulations that explain themselves. But there's no good home for them: GitHub Pages and local files are hard to share, comment on, or iterate.
 
-Authoring is a prompt. The document is a build artifact, not something you maintain by hand.
+`tdoc` gives these docs a home. **Authoring is a prompt. The document is a build artifact, not something you maintain by hand.**
 
 ## Install
 
