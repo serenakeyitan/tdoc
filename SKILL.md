@@ -232,7 +232,7 @@ Wraps `bin/tdoc-update`. Runs `git fetch + git merge --ff-only` against
 `origin/main` of `serenakeyitan/tdoc`.
 
 - `tdoc-update --check` → report-only, prints incoming commits without changing anything
-- `tdoc-update` → apply, with auto-stash of local edits
+- `tdoc-update` → apply, with auto-stash of local edits, **auto-restarts the running local server** so new routes / overlay code take effect
 - `tdoc-update --yes` → also redeploy the Worker so users see new overlay code
 
 ```bash
@@ -252,6 +252,14 @@ which dep / Cloudflare resource is missing.
 ```bash
 "$SKILL_DIR/bin/tdoc-doctor" | jq .
 ```
+
+## Troubleshooting
+
+When the user reports a problem, check these first:
+
+- **`/api/publish` 404, or "string did not match the expected pattern" in the Publish modal** → the running server is stale (old process, doesn't have current routes). Restart it: `pkill -f "$SKILL_DIR/server/server.js" && nohup node "$SKILL_DIR/server/server.js" > "$TDOC_DIR/.server.log" 2>&1 &`. `/tdoc update` now auto-restarts, but a server that was started before the update is still running stale code until restarted.
+- **Comment popup doesn't appear when selecting text** → ensure overlay.js has the fix where a drag-without-artifact-intersection falls through to the text-selection branch (regression test: `ui.test.js` "Drag-to-select TEXT in a `<p>` opens the comment popup"). If the test fails, check `overlay.js` mouseup handler: the `if (dragged) { ... return; }` block must only `return` when an artifact was actually hit.
+- **Publish modal hangs forever** → check `~/tdocs/.server.log`; usually `wrangler login` is waiting for browser auth or R2 isn't enabled.
 
 ## HTML generation rules
 

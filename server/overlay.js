@@ -1408,15 +1408,15 @@
       const commentable = e.target.matches?.(COMMENTABLE) ? e.target : e.target.closest?.(COMMENTABLE);
       if (commentable && !isInUI(commentable)) return;
     }
+    // Snapshot selection synchronously — the trailing click can collapse it.
+    const sel = window.getSelection();
+    const text = sel && sel.toString().trim();
+    if (!text || text.length < 2 || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0).cloneRange();
+    const rect = range.getBoundingClientRect();
+    const ctx = getContext(range, 60);
     setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel.toString().trim();
-      if (text && text.length >= 2) {
-        const range = sel.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        const ctx = getContext(range, 60);
-        openPopup({ kind: 'text', text, context_before: ctx.before, context_after: ctx.after, _range: range }, rect);
-      }
+      openPopup({ kind: 'text', text, context_before: ctx.before, context_after: ctx.after, _range: range }, rect);
     }, 0);
   }, true);
 

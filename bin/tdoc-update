@@ -85,6 +85,23 @@ if ! git merge --ff-only origin/main --quiet; then
 fi
 echo "[tdoc-update] updated to: $(git rev-parse --short HEAD)"
 
+# Restart the local server if it's running — otherwise the user keeps hitting
+# stale routes (e.g. a 404 on /api/publish after we added the endpoint).
+if pgrep -f "$SKILL_DIR/server/server.js" >/dev/null 2>&1; then
+  echo "[tdoc-update] restarting local server to pick up new code..."
+  pkill -f "$SKILL_DIR/server/server.js" 2>/dev/null || true
+  sleep 1
+  TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"
+  mkdir -p "$TDOC_DIR"
+  nohup node "$SKILL_DIR/server/server.js" > "$TDOC_DIR/.server.log" 2>&1 &
+  sleep 1
+  if curl -sf http://localhost:7878/api/ping >/dev/null 2>&1; then
+    echo "[tdoc-update] server back up at http://localhost:7878"
+  else
+    echo "[tdoc-update] ⚠ server didn't come back — check $TDOC_DIR/.server.log"
+  fi
+fi
+
 # Restore stash
 if [ -n "$STASH_REF" ]; then
   echo "[tdoc-update] restoring stashed local edits..."

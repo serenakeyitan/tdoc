@@ -174,6 +174,28 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     await page.waitForTimeout(150);
   });
 
+  await t('Drag-to-select TEXT in a <p> opens the comment popup', async () => {
+    // Regression: a drag that doesn't intersect any artifact must fall through
+    // to the text-selection-popup branch. Previously returned early.
+    const target = await page.evaluate(() => {
+      const els = document.querySelectorAll('.wrap p, .wrap li, .wrap h1, .wrap h2, .wrap h3');
+      for (const el of els) {
+        if (el.textContent.trim().length > 30) {
+          const r = el.getBoundingClientRect();
+          return { sx: r.left + 5, sy: r.top + r.height/2, ex: r.left + 180, ey: r.top + r.height/2 };
+        }
+      }
+      return null;
+    });
+    if (!target) { console.log('  (no suitable text element, skipping)'); return; }
+    await page.mouse.move(target.sx, target.sy);
+    await page.mouse.down();
+    await page.mouse.move(target.ex, target.ey, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForSelector('.tdoc-popup', { timeout: 2000 });
+    await page.click('.tdoc-popup .head .x').catch(() => {});
+  });
+
   await t('Drag STARTED INSIDE canvas does NOT open popup (passes through)', async () => {
     const canvas = await page.$('canvas');
     if (!canvas) { console.log('  (no canvas, skipping)'); return; }
