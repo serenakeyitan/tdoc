@@ -2,6 +2,9 @@
 
 > **Inspired by [bdocs](https://x.com/jessepollak/status/2054313757543964857) by [Jesse Pollak](https://x.com/jessepollak).** All credit to Jesse for the original idea, the "HTML is a powerful interface" framing, and the bdocs internal tool at Coinbase that showed what prompt-native docs can be. `tdoc` is an open-source community implementation of that vision — you should follow [@jessepollak](https://x.com/jessepollak) for the real thinking behind this.
 
+<img width="1149" height="603" alt="Screenshot 2026-05-13 at 00 21 01" src="https://github.com/user-attachments/assets/2fd99fdd-7739-4267-a41f-53faa64f362f" />
+
+
 Prompt-native interactive HTML documents. Generate self-contained HTML docs from a prompt, serve them locally with text- and artifact-anchored inline commenting, and publish to your own Cloudflare Worker for free always-on sharing.
 
 This is a [Claude Code](https://claude.com/claude-code) skill. After installing, you invoke it from inside Claude Code with `/tdoc <command>`.
