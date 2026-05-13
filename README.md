@@ -14,14 +14,36 @@ The whole concept — *"what if a doc could think? what if HTML were the editing
 
 > "There is no editor. The authoring interface is a prompt. The document is a build artifact, not something you manually maintain."
 
-Everything in `tdoc` follows from that framing. The differences are scope, not idea — Jesse's bdocs is the original; this is one possible open-source community implementation:
+Everything in `tdoc` follows from that framing. Jesse's bdocs is the original; this is one possible open-source community implementation.
 
-- **Open** — MIT-licensed, anyone can clone and run it
-- **Collaborative** — each user publishes to *their own* Cloudflare Worker, gets a real shareable URL, and viewers sign in with GitHub to comment on text or artifacts (images, SVG, canvas, video). Threaded replies, emoji reactions.
-- **Always-on** — published docs live on Cloudflare's edge (free tier). No laptop needed.
-- **Live-updatable** — `/tdoc update` pulls the latest skill code; `--yes` redeploys your Worker so commenters get the new UI immediately.
+### The only real difference: bring your own Cloudflare (free, shareable per-doc links)
 
-If Jesse ever open-sources the real bdocs, use that. This exists because the idea is too good to wait for.
+bdocs is hosted internally at Coinbase. `tdoc` flips that: when you want to make a doc public, **you deploy it to your own free Cloudflare Worker** with one command (`/tdoc publish <slug>`). The skill auto-detects your Cloudflare account, sets up R2 + KV + a Worker, and gives you back a real shareable URL like:
+
+```
+https://tdoc-<your-handle>.<your-handle>.workers.dev/d/<slug>/v/<N>
+```
+
+Every published doc gets its own URL — **click "Share" on any doc to copy that link**, send it to anyone, and they can read it (and sign in with GitHub to comment) without installing anything. Cloudflare Workers + DNS + R2 + KV are all **on the free tier** for normal usage. You own the infra; nobody else (including me) ever sees or pays for your traffic. **$0 forever** until you exceed a free quota that personal use will never come close to.
+
+That's the headline upgrade vs. bdocs:
+
+| | bdocs (Coinbase) | tdoc |
+|---|---|---|
+| Hosting | Coinbase-owned servers | **Your own free Cloudflare Worker** |
+| Per-doc shareable URL | Inside Coinbase only | **Public URL, share with anyone** |
+| Cost to you | n/a (Coinbase pays) | **$0 (free Cloudflare tier)** |
+| Open source | No | MIT |
+| Comments | Yes | Yes — text + artifacts, threads, reactions |
+| Sign-in | Coinbase SSO | GitHub Device Flow (zero per-user setup) |
+
+Other things this implementation gets right:
+
+- **Open** — MIT-licensed, anyone can clone, fork, run it
+- **Always-on** — published docs live on Cloudflare's edge; no laptop required
+- **Live-updatable** — `/tdoc update` pulls the latest skill code; `--yes` redeploys your Worker so commenters see new UI immediately
+
+If Jesse ever open-sources the real bdocs, use that. This exists because the idea is too good to wait for, and the bring-your-own-Cloudflare model makes it shippable to anyone for free today.
 
 ## Why
 
