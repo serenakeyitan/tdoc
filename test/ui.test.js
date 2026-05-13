@@ -299,6 +299,22 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     await page.waitForTimeout(150);
   });
 
+  // ----- Fork mode: renderable URL is read-only -----
+  await t('Fork URL loads in fork mode (read-only, comments mirrored)', async () => {
+    const forkPage = await ctx.newPage();
+    const u = URL.replace(/\/?$/, '') + '/fork';
+    await forkPage.goto(u, { waitUntil: 'networkidle' });
+    const slug = await forkPage.$eval('.tdoc-bar .slug', el => el.textContent);
+    if (!slug.toLowerCase().includes('fork of')) throw new Error(`expected "fork of" in slug, got "${slug}"`);
+    const saveBtn = await forkPage.$('#tdoc-saveas-btn');
+    if (!saveBtn) throw new Error('no #tdoc-saveas-btn in fork mode');
+    const replyForm = await forkPage.$('.tdoc-reply-form');
+    if (replyForm) throw new Error('reply form present in fork mode (should be read-only)');
+    const replyToggle = await forkPage.$('.tdoc-reply-toggle');
+    if (replyToggle) throw new Error('Reply button present in fork mode');
+    await forkPage.close();
+  });
+
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed.`);
   process.exit(fail ? 1 : 0);

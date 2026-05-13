@@ -177,8 +177,14 @@ export default {
       return html(injectOverlay(raw, slug, Number(vStr), identity));
     }
 
-    // ---- doc export (fork) ----
-    // Returns a standalone HTML file with:
+    // ---- doc export / fork ----
+    // /export → forces a file download (Content-Disposition: attachment) unless
+    //           ?download=0. Used for "save a copy" links.
+    // /fork   → returns the SAME bundled HTML but boots the overlay in
+    //           mode:"fork" (read-only renderable view with comments mirrored
+    //           from the embedded JSON). No /api calls, no auth, no publish.
+    //
+    // Both routes return:
     //   1. A leading agent-readable banner (HTML comment) listing every
     //      comment + reply + reaction grouped by anchor.
     //   2. A <script type="application/json" id="tdoc-fork-comments"> block
@@ -186,11 +192,9 @@ export default {
     //   3. Inline <!--TDOC-COMMENT id--> markers wrapped around each comment's
     //      anchor text so agents can locate the right region for "apply this
     //      comment" requests.
-    //   4. No Content-Disposition header — the URL opens in-tab, lets the
-    //      user save it themselves if desired. ?download=1 to force download.
-    const exportMatch = p.match(/^\/d\/([^/]+)\/v\/(\d+)\/export\/?$/);
+    const exportMatch = p.match(/^\/d\/([^/]+)\/v\/(\d+)\/(export|fork)\/?$/);
     if (exportMatch && method === 'GET') {
-      const [, slug, vStr] = exportMatch;
+      const [, slug, vStr, kind] = exportMatch;
       const obj = await env.DOCS.get(`docs/${slug}/v${vStr}/index.html`);
       if (!obj) return text(`Not found: ${slug} v${vStr}`, { status: 404 });
       let html = await obj.text();
@@ -257,8 +261,25 @@ export default {
         html = html.slice(0, idx) + replacement + html.slice(idx + needle.length);
       }
 
-      const finalHtml = banner + jsonBlock + html;
-      const forceDownload = url.searchParams.get('download') === '1';
+      // The fork route boots the overlay in read-only "fork" mode so the
+      // user can SEE what they just downloaded — comments rendered as cards,
+      // anchors highlighted — without any backend.
+      let bodyHtml = html;
+      if (kind === 'fork') {
+        const forkCfg = { slug, version: Number(vStr), identity: null, authConfigured: false, mode: 'fork', originalSlug: slug };
+        const inject =
+          `<script>window.__TDOC__ = ${JSON.stringify(forkCfg)};</script>\n` +
+          `<script>${OVERLAY_JS}</script>`;
+        if (bodyHtml.includes('</body>')) bodyHtml = bodyHtml.replace('</body>', `${inject}\n</body>`);
+        else bodyHtml = bodyHtml + inject;
+      }
+
+      const finalHtml = banner + jsonBlock + bodyHtml;
+      const dl = url.searchParams.get('download');
+      // /export defaults to attachment; /fork defaults to inline. Either can be
+      // overridden with ?download=1 / ?download=0.
+      const defaultAttach = kind === 'export';
+      const forceDownload = dl === '1' || (defaultAttach && dl !== '0');
       const headers = { 'Content-Type': 'text/html; charset=utf-8' };
       if (forceDownload) headers['Content-Disposition'] = `attachment; filename="${slug}-v${vStr}-fork.html"`;
       return new Response(finalHtml, { status: 200, headers });

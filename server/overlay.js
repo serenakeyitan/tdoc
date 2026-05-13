@@ -23,6 +23,10 @@
   const { slug, version } = cfg;
   const mode = cfg.mode || 'local';
   const isPublished = mode === 'published';
+  const isFork = mode === 'fork';
+  // Fork mode renders the doc read-only with comments mirrored from the
+  // embedded #tdoc-fork-comments JSON. No /api calls, no auth, no publish.
+  // The original published slug is in cfg.originalSlug so we can label it.
   let identity = cfg.identity || null;
   if (!slug) return;
 
@@ -224,7 +228,7 @@
   .tdoc-modal .status { color: #888; font-size: 13px; }
 
   /* Narrow mode (drawer + FAB) */
-  body.tdoc-narrow .tdoc-bar .slug, body.tdoc-narrow .tdoc-bar #tdoc-fork-btn, body.tdoc-narrow .tdoc-bar #tdoc-home-btn { display: none; }
+  body.tdoc-narrow .tdoc-bar .slug, body.tdoc-narrow .tdoc-bar #tdoc-fork-btn, body.tdoc-narrow .tdoc-bar #tdoc-home-btn, body.tdoc-narrow .tdoc-bar #tdoc-saveas-btn { display: none; }
   body.tdoc-narrow .tdoc-bar .tdoc-secondary-toggle { display: inline-flex; }
   body.tdoc-narrow .tdoc-bar .title { font-size: 13px; max-width: 50vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.tdoc-narrow .tdoc-chip .name { display: none; }
@@ -368,9 +372,17 @@
   // ========== Top bar ==========
   const bar = document.createElement('div');
   bar.className = 'tdoc-bar';
+  // Title differs in fork mode so the user can see what they're looking at.
+  const slugLabel = isFork
+    ? `fork of ${cfg.originalSlug || slug} · v${version}`
+    : `${slug} · v${version}${isPublished ? ' · published' : ''}`;
+  // Fork button: shown only on published docs. Fork mode shows "Save copy" instead.
+  const forkBtnHtml = isPublished
+    ? '<button id="tdoc-fork-btn">Fork</button>'
+    : (isFork ? '<button id="tdoc-saveas-btn">Save As New Local Doc</button>' : '');
   bar.innerHTML = `
     <span class="title" id="tdoc-title">tdoc</span>
-    <span class="slug">${slug} · v${version}${isPublished ? ' · published' : ''}</span>
+    <span class="slug">${slugLabel}</span>
     <span class="spacer"></span>
     <div class="tdoc-menu-wrap">
       <button id="tdoc-copy-md-btn" class="tdoc-icon-btn" title="Copy as Markdown" aria-label="Copy as Markdown">
@@ -382,12 +394,13 @@
         <button data-mode="doc-comments">Doc + comments</button>
       </div>
     </div>
-    ${isPublished ? '<button id="tdoc-fork-btn">Fork</button>' : ''}
+    ${forkBtnHtml}
     <button id="tdoc-home-btn">All docs</button>
     <button class="tdoc-secondary-toggle" id="tdoc-more-btn" aria-label="More" title="More">⋯</button>
     <span id="tdoc-identity-slot"></span>
     <div class="tdoc-secondary-menu" id="tdoc-secondary-menu">
       ${isPublished ? '<button data-action="fork">Fork</button>' : ''}
+      ${isFork ? '<button data-action="saveas">Save copy</button>' : ''}
       <button data-action="home">All docs</button>
     </div>
   `;
@@ -397,9 +410,33 @@
   if (titleEl && titleEl.textContent) document.getElementById('tdoc-title').textContent = titleEl.textContent;
 
   document.getElementById('tdoc-home-btn').onclick = () => location.href = '/';
+
+  // Fork: opens the renderable /fork view in a new tab AND triggers a download
+  // (one click, both happen). We use a hidden iframe to fire the download so
+  // the user keeps focus on the new fork tab.
+  function forkAndDownload() {
+    const base = `/d/${encodeURIComponent(slug)}/v/${version}`;
+    window.open(`${base}/fork`, '_blank');
+    // hidden iframe → triggers the attachment download w/o stealing focus
+    const f = document.createElement('iframe');
+    f.style.display = 'none';
+    f.src = `${base}/export?download=1`;
+    document.body.appendChild(f);
+    setTimeout(() => f.remove(), 8000);
+  }
+  function downloadFork() {
+    const a = document.createElement('a');
+    a.href = `/d/${encodeURIComponent(slug)}/v/${version}/export?download=1`;
+    a.download = `${slug}-v${version}-fork.html`;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
   if (isPublished) {
     const fb = document.getElementById('tdoc-fork-btn');
-    if (fb) fb.onclick = () => window.open(`/d/${encodeURIComponent(slug)}/v/${version}/export`, '_blank');
+    if (fb) fb.onclick = forkAndDownload;
+  }
+  if (isFork) {
+    const sa = document.getElementById('tdoc-saveas-btn');
+    if (sa) sa.onclick = downloadFork;
   }
 
   const copyBtn = document.getElementById('tdoc-copy-md-btn');
@@ -421,7 +458,8 @@
       e.stopPropagation();
       secMenu.classList.remove('open');
       if (b.dataset.action === 'home') location.href = '/';
-      if (b.dataset.action === 'fork') window.open(`/d/${encodeURIComponent(slug)}/v/${version}/export`, '_blank');
+      if (b.dataset.action === 'fork') forkAndDownload();
+      if (b.dataset.action === 'saveas') downloadFork();
     };
   });
 
@@ -590,7 +628,7 @@
     return `<button class="tdoc-react-add inline" data-target-id="${target.id}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button>`;
   }
   function renderReply(reply) {
-    const canDelete = !isPublished || (identity && reply.author && identity.login === reply.author.login);
+    const canDelete = !isFork && (!isPublished || (identity && reply.author && identity.login === reply.author.login));
     const hasReactions = reply.reactions && Object.values(reply.reactions).some(u => u && u.length > 0);
     return `<div class="tdoc-reply" data-comment-id="${reply.id}">
       ${renderAuthor(reply.author)}
@@ -599,7 +637,7 @@
       <div class="meta">
         <span>${new Date(reply.created).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         <span class="actions">
-          ${!hasReactions ? renderReactInline(reply) : ''}
+          ${!hasReactions && !isFork ? renderReactInline(reply) : ''}
           ${canDelete ? `<span class="del" data-id="${reply.id}">delete</span>` : ''}
         </span>
       </div>
@@ -609,7 +647,7 @@
     const card = document.createElement('div');
     card.className = 'tdoc-margin-comment';
     card.dataset.commentId = comment.id;
-    const canDelete = !isPublished || (identity && comment.author && identity.login === comment.author.login);
+    const canDelete = !isFork && (!isPublished || (identity && comment.author && identity.login === comment.author.login));
     const replies = Array.isArray(comment.replies) ? comment.replies : [];
     const hasReactions = comment.reactions && Object.values(comment.reactions).some(u => u && u.length > 0);
     card.innerHTML = `
@@ -619,8 +657,8 @@
       <div class="meta">
         <span>v${comment.version} · ${new Date(comment.created).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         <span class="actions">
-          ${!hasReactions ? renderReactInline(comment) : ''}
-          <span class="tdoc-reply-toggle" data-id="${comment.id}">Reply</span>
+          ${!hasReactions && !isFork ? renderReactInline(comment) : ''}
+          ${isFork ? '' : `<span class="tdoc-reply-toggle" data-id="${comment.id}">Reply</span>`}
           <span class="copy-md" data-id="${comment.id}" title="Copy as Markdown" aria-label="Copy as Markdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
           ${canDelete ? `<span class="del" data-id="${comment.id}">delete</span>` : ''}
         </span>
@@ -632,13 +670,13 @@
         </div>
         <div class="tdoc-replies">${replies.map(r => renderReply(r)).join('')}</div>
       ` : ''}
-      <div class="tdoc-reply-form" data-parent-id="${comment.id}">
+      ${isFork ? '' : `<div class="tdoc-reply-form" data-parent-id="${comment.id}">
         <textarea placeholder="Reply…"></textarea>
         <div class="tdoc-reply-form-foot">
           <span class="hint">⌘+Enter to submit · Esc to cancel</span>
           <button class="tdoc-reply-submit">Reply</button>
         </div>
-      </div>
+      </div>`}
     `;
 
     const repliesToggle = card.querySelector('.tdoc-replies-toggle');
@@ -699,6 +737,7 @@
     card.querySelectorAll('.tdoc-react-chip').forEach(chip => {
       chip.onclick = async (e) => {
         e.stopPropagation();
+        if (isFork) return; // read-only mode
         if (isPublished && !identity) { startDeviceFlow(); return; }
         await fetch('/api/reactions', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -910,11 +949,19 @@
     state.cardEls.clear();
 
     let list = [];
-    try {
-      const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}`);
-      list = await r.json();
-    } catch { list = []; }
-    state.activeComments = list.filter(c => c.status === 'open');
+    if (isFork) {
+      // Read-only: parse the embedded JSON. No /api calls.
+      const block = document.getElementById('tdoc-fork-comments');
+      if (block) {
+        try { list = (JSON.parse(block.textContent || '{}').comments) || []; } catch { list = []; }
+      }
+    } else {
+      try {
+        const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}`);
+        list = await r.json();
+      } catch { list = []; }
+    }
+    state.activeComments = list.filter(c => c.status !== 'resolved');
     document.body.classList.toggle('tdoc-has-comments', state.activeComments.length > 0);
     document.body.dataset.tdocReady = '1';
 
@@ -1084,6 +1131,7 @@
   }
 
   function openPopup(anchor, rect) {
+    if (isFork) return; // read-only fork view: no new comments
     closePopup();
     hideHoverOutline();
     popup = document.createElement('div');
@@ -1259,6 +1307,7 @@
   // works for users who prefer that gesture.
   let hoverOutlineEl = null, commentPill = null, pillTargetEl = null;
   function showHoverUI(el) {
+    if (isFork) return; // read-only: no new-comment affordances
     if (hoverOutlineEl?._target === el && pillTargetEl === el) return;
     hideHoverUI();
     const r = el.getBoundingClientRect();
