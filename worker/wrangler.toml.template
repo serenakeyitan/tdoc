@@ -1,4 +1,4 @@
-name = "tdoc-PLACEHOLDER_USER"
+name = "tdoc"
 main = "_worker.bundled.js"
 compatibility_date = "2025-01-01"
 workers_dev = true

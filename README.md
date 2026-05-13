@@ -1,6 +1,6 @@
 # tdoc — google doc, but designed for agents
 
-This is a sample tdoc, try: https://tdoc-serenatan.serenatan.workers.dev/d/conway-life/v/2
+Try a sample: https://tdoc.serenatan.workers.dev/d/conway-life/v/2
 
 <img width="1149" height="603" alt="Screenshot 2026-05-13 at 00 21 01" src="https://github.com/user-attachments/assets/f89b12fa-6661-49b6-b9eb-dc0677e3cf1b" />
 
@@ -12,7 +12,7 @@ Open-source take on Jesse Pollak's bdocs concept. Same idea: prose, sliders, cha
 You:  /tdoc new "an explainer with a slider showing how interest compounds"
 Claude: <generates doc, opens it locally>
 You:  /tdoc publish
-Claude: https://tdoc-yourname.yourname.workers.dev/d/compound-interest/v/1
+Claude: https://tdoc.yourname.workers.dev/d/compound-interest/v/1
 ```
 
 Anyone with the link reads it instantly. Signs in with GitHub to comment on any sentence, image, or chart. You pull the comments back (`/tdoc pull`), tell Claude what to do with them, and it regenerates v2.

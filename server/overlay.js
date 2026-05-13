@@ -50,19 +50,11 @@
   body p,body h1,body h2,body h3,body h4,body h5,body h6,body li,body blockquote,body pre,body code,body figcaption,body th,body td,body dt,body dd,body summary,body span,body em,body strong,body i,body b,body u,body s,body a,body small,body sub,body sup,body mark,body textarea,body input[type="text"],body input[type="search"],body [contenteditable] { -webkit-user-select: text; user-select: text; }
   body.tdoc-has-comments:not(.tdoc-narrow) { padding-right: 320px !important; }
   body.tdoc-narrow { padding-right: 0 !important; }
-  /* When there are comments AND we have room for the side column, anchor the
-     article to the LEFT instead of letting it auto-center. Growing the window
-     then adds space to the RIGHT first — where the comment cards live — so the
-     user sees more comment-column real estate immediately. The same rule means
-     shrinking eats from the LEFT margin first (we already had this behavior
-     via the 320px right-padding; this completes the symmetry on expand). */
-  body.tdoc-has-comments:not(.tdoc-narrow) :where(.wrap, main, article, .content, .container) {
-    /* Keep a small minimum left margin for comfortable reading; expand-mode
-       still pushes extra space to the right via the fixed 320px right-padding
-       on body. */
-    margin-left: max(24px, env(safe-area-inset-left, 0px)) !important;
-    margin-right: auto !important;
-  }
+  /* The body right-padding reserves space for the comment column. The
+     article centers itself naturally inside the remaining (viewport minus
+     320px) space via its own margin auto. As the window shrinks, the symmetric
+     margins shrink with it; once they hit the article's min width, narrow-mode
+     takes over and the drawer kicks in. */
   /* Defensive responsive defaults for artifacts. Docs sometimes hardcode pixel
      widths (e.g. <canvas width="640">) that overflow on phones. These rules
      constrain every artifact to its container width without changing its

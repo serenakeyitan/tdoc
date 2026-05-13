@@ -113,7 +113,9 @@ first_time_setup() {
   echo "[tdoc] subdomain: ${SUBDOMAIN}.workers.dev"
 
   CUSTOM_DOMAIN=""
-  PUBLIC_HOST="tdoc-${SUBDOMAIN}.${SUBDOMAIN}.workers.dev"
+  # Worker is named just "tdoc". Public URL becomes tdoc.<your-subdomain>.workers.dev
+  # rather than the old tdoc-<sub>.<sub>.workers.dev double-prefix.
+  PUBLIC_HOST="tdoc.${SUBDOMAIN}.workers.dev"
 
   # 3. create R2 bucket (idempotent via API)
   echo "[tdoc] ensuring R2 bucket tdoc-docs exists..."
@@ -164,9 +166,8 @@ first_time_setup() {
   token="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
 
   # 6. write wrangler.toml
-  local worker_name="tdoc-${SUBDOMAIN}"
+  local worker_name="tdoc"
   sed \
-    -e "s/PLACEHOLDER_USER/${SUBDOMAIN}/g" \
     -e "s/PLACEHOLDER_KV_ID/${kv_id}/g" \
     "$WORKER_DIR/wrangler.toml.template" > "$WORKER_DIR/wrangler.toml"
 
