@@ -106,12 +106,27 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     if (cursor !== 'pointer') throw new Error(`expected cursor:pointer on anchor mark, got "${cursor}"`);
   });
 
-  await t('Hover outline appears over canvas', async () => {
+  await t('Hover outline + Comment pill appear over an unanchored canvas', async () => {
     const canvas = await page.$('canvas');
     if (!canvas) { console.log('  (no canvas in doc, skipping)'); return; }
+    // If the canvas is already anchored, the hover UI is intentionally suppressed
+    // (the existing comment owns the click). Skip in that case.
+    const anchored = await page.evaluate(() => {
+      const c = document.querySelector('canvas');
+      if (!c || !window.CSS || !CSS.highlights) return false;
+      // Check any ::highlight() ranges touching the canvas (heuristic: any
+      // tdoc-element-outline visible on the canvas)
+      for (const o of document.querySelectorAll('.tdoc-element-outline')) {
+        const r1 = c.getBoundingClientRect(), r2 = o.getBoundingClientRect();
+        if (Math.abs(r1.left - r2.left) < 6 && Math.abs(r1.top - r2.top) < 6) return true;
+      }
+      return false;
+    });
+    if (anchored) { console.log('  (canvas already anchored, skipping)'); return; }
     const box = await canvas.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.waitForSelector('.tdoc-hover-outline', { timeout: 2000 });
+    await page.waitForSelector('.tdoc-comment-pill', { timeout: 1000 });
   });
 
   await t('Plain click on canvas does NOT open popup (passes through)', async () => {

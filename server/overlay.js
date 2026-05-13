@@ -151,17 +151,34 @@
   /* Anchor highlights (Custom Highlight API + fallback span) */
   ::highlight(tdoc-pending) { background-color: #fff3a8; }
   ::highlight(tdoc-anchor) { background-color: #fff7d0; }
-  ::highlight(tdoc-anchor-active) { background-color: #fff3a8; text-decoration: underline 1.5px #f0d000; }
+  /* Active = clicked. Visibly different from resting: vivid yellow + thick
+     gold underline. (The CSS Highlight API only supports background-color,
+     color, and text-decoration — so we stack those.) */
+  ::highlight(tdoc-anchor-active) {
+    background-color: #ffd84d;
+    text-decoration: underline solid #b8860b;
+    text-decoration-thickness: 3px;
+    text-underline-offset: 2px;
+  }
   .tdoc-anchor-mark { background: #fff7d0; cursor: pointer; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   .tdoc-anchor-mark:hover { background: #fdedb0; }
-  .tdoc-anchor-mark.active { background: #fff3a8; box-shadow: 0 -1.5px 0 0 #f0d000 inset; }
+  .tdoc-anchor-mark.active { background: #ffd84d; box-shadow: 0 -3px 0 -1px #b8860b inset; }
 
   /* Element outlines + hover affordance */
   .tdoc-element-outline { position: absolute; pointer-events: none; border: 1.5px solid rgba(22,82,240,0.35); border-radius: 4px; box-sizing: border-box; z-index: 999995; transition: border-color .15s, box-shadow .15s, border-width .15s; }
   .tdoc-element-outline.pending { border-color: #f0d000; border-width: 2px; background: transparent; }
   .tdoc-element-outline.active { border-color: #1652f0; border-width: 2px; box-shadow: 0 0 0 4px rgba(22,82,240,0.18); }
   .tdoc-hover-outline { position: absolute; pointer-events: none; z-index: 999995; border: 2px dashed #1652f0; border-radius: 4px; background: rgba(22,82,240,0.06); box-sizing: border-box; transition: opacity .12s; }
-  .tdoc-hover-hint { position: absolute; pointer-events: none; z-index: 999998; background: #0a0a0a; color: #fff; font: 11px system-ui; padding: 3px 8px; border-radius: 4px; opacity: 0.92; white-space: nowrap; }
+  /* Clickable pill that appears over commentable artifacts (img/canvas/svg/video/pre).
+     Sits at the top-right corner of the artifact, primary blue, looks like a real button. */
+  .tdoc-comment-pill { position: absolute; z-index: 999998;
+    background: #1652f0; color: #fff; font: 600 12px system-ui;
+    padding: 5px 10px; border: none; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(22,82,240,0.35);
+    display: inline-flex; align-items: center; gap: 5px;
+    transition: transform .12s, box-shadow .12s; }
+  .tdoc-comment-pill:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(22,82,240,0.45); }
+  .tdoc-comment-pill svg { width: 13px; height: 13px; }
   .tdoc-drag-marquee { position: absolute; pointer-events: none; z-index: 999997; border: 1.5px solid #1652f0; background: rgba(22,82,240,0.1); box-sizing: border-box; }
 
   /* Popup (new-comment) */
@@ -208,7 +225,7 @@
   body.tdoc-narrow .tdoc-popup { width: calc(100vw - 24px); max-width: 320px; left: 12px !important; }
   body.tdoc-narrow .tdoc-modal { width: calc(100vw - 32px); padding: 20px; }
   body.tdoc-narrow .tdoc-modal .code { font-size: 20px; }
-  body.tdoc-narrow .tdoc-hover-outline, body.tdoc-narrow .tdoc-hover-hint, body.tdoc-narrow .tdoc-drag-marquee { display: none; }
+  body.tdoc-narrow .tdoc-hover-outline, body.tdoc-narrow .tdoc-comment-pill, body.tdoc-narrow .tdoc-drag-marquee { display: none; }
   body.tdoc-narrow .tdoc-emoji-picker { grid-template-columns: repeat(6, 36px); }
   body.tdoc-narrow .tdoc-emoji-picker button { width: 36px; height: 36px; font-size: 20px; }
   @media (max-width: 480px) {
@@ -231,10 +248,15 @@
   /* Dark mode (OS preference) + doc-dark (per-doc classification) */
   body.tdoc-doc-dark ::highlight(tdoc-pending) { background-color: #8a7400; }
   body.tdoc-doc-dark ::highlight(tdoc-anchor) { background-color: #5e4f00; }
-  body.tdoc-doc-dark ::highlight(tdoc-anchor-active) { background-color: #8a7400; text-decoration-color: #b89c00; }
+  body.tdoc-doc-dark ::highlight(tdoc-anchor-active) {
+    background-color: #c79900;
+    text-decoration: underline solid #ffd84d;
+    text-decoration-thickness: 3px;
+    text-underline-offset: 2px;
+  }
   body.tdoc-doc-dark .tdoc-anchor-mark { background: #5e4f00; color: inherit; }
   body.tdoc-doc-dark .tdoc-anchor-mark:hover { background: #7a6700; }
-  body.tdoc-doc-dark .tdoc-anchor-mark.active { background: #8a7400; box-shadow: 0 -1.5px 0 0 #b89c00 inset; }
+  body.tdoc-doc-dark .tdoc-anchor-mark.active { background: #c79900; box-shadow: 0 -3px 0 -1px #ffd84d inset; }
   body.tdoc-doc-dark .tdoc-footer { color: #777; border-top-color: #2a2a2a; }
   body.tdoc-doc-dark .tdoc-footer a { color: #999; }
   body.tdoc-doc-dark .tdoc-footer a:hover { color: #8ab0ff; }
@@ -1083,7 +1105,7 @@
   let dragState = null;
 
   function isInUI(el) {
-    return el && el.closest && el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-hover-outline, #tdoc-comment-layer, .tdoc-footer');
+    return el && el.closest && el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-hover-outline, .tdoc-comment-pill, .tdoc-emoji-picker, .tdoc-secondary-menu, #tdoc-comment-layer, .tdoc-footer');
   }
   function rectsOverlap(a, b) { return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom); }
   function findArtifactIntersecting(dragRect) {
@@ -1174,52 +1196,88 @@
   }, true);
 
   // ========== Hover affordance ==========
-  let hoverOutlineEl = null, hoverHint = null;
-  function showHoverOutline(el) {
-    if (hoverOutlineEl?._target === el) return;
-    hideHoverOutline();
+  // ========== Artifact hover affordance ==========
+  // Hovering an unanchored commentable element (img/canvas/svg/video/pre)
+  // shows: (1) a dashed blue outline around it, (2) a clickable "Comment" pill
+  // in its top-right corner. Click the pill → opens the comment popup anchored
+  // to that element. This is the discoverable path; drag-from-outside also
+  // works for users who prefer that gesture.
+  let hoverOutlineEl = null, commentPill = null, pillTargetEl = null;
+  function showHoverUI(el) {
+    if (hoverOutlineEl?._target === el && pillTargetEl === el) return;
+    hideHoverUI();
+    const r = el.getBoundingClientRect();
+
     hoverOutlineEl = document.createElement('div');
     hoverOutlineEl.className = 'tdoc-hover-outline';
     hoverOutlineEl._target = el;
-    document.body.appendChild(hoverOutlineEl);
-    const r = el.getBoundingClientRect();
     hoverOutlineEl.style.top = (window.scrollY + r.top - 3) + 'px';
     hoverOutlineEl.style.left = (window.scrollX + r.left - 3) + 'px';
     hoverOutlineEl.style.width = (r.width + 6) + 'px';
     hoverOutlineEl.style.height = (r.height + 6) + 'px';
+    document.body.appendChild(hoverOutlineEl);
+
+    commentPill = document.createElement('button');
+    commentPill.className = 'tdoc-comment-pill';
+    commentPill.type = 'button';
+    commentPill.setAttribute('aria-label', 'Comment on this');
+    commentPill.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment`;
+    // Anchor near the top-right corner of the element, inset slightly inward
+    // so the pill always sits over the artifact (not floating in margin).
+    commentPill.style.top = (window.scrollY + r.top + 8) + 'px';
+    commentPill.style.left = (window.scrollX + Math.max(r.left + 8, r.right - 110)) + 'px';
+    commentPill.onclick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const target = pillTargetEl;
+      hideHoverUI();
+      if (!target) return;
+      const tr = target.getBoundingClientRect();
+      openPopup({
+        kind: 'element',
+        selector: elementSelector(target),
+        label: elementLabel(target),
+        _el: target,
+      }, tr);
+    };
+    pillTargetEl = el;
+    document.body.appendChild(commentPill);
   }
-  function hideHoverOutline() {
+  function hideHoverUI() {
     if (hoverOutlineEl) { hoverOutlineEl.remove(); hoverOutlineEl = null; }
-    hideHoverHint();
+    if (commentPill) { commentPill.remove(); commentPill = null; }
+    pillTargetEl = null;
   }
-  function showHoverHint(el) {
-    if (hoverHint) return;
-    hoverHint = document.createElement('div');
-    hoverHint.className = 'tdoc-hover-hint';
-    hoverHint.textContent = 'drag from outside to comment';
-    document.body.appendChild(hoverHint);
-    const r = el.getBoundingClientRect();
-    hoverHint.style.top = (window.scrollY + r.top + 6) + 'px';
-    hoverHint.style.left = (window.scrollX + r.left + 6) + 'px';
-  }
-  function hideHoverHint() { if (hoverHint) { hoverHint.remove(); hoverHint = null; } }
 
   document.addEventListener('mouseover', (e) => {
     const t = e.target;
-    if (!t || t.nodeType !== 1 || isInUI(t)) { hideHoverOutline(); return; }
+    if (!t || t.nodeType !== 1) return;
+    // The pill itself is in `body` — don't hide UI when the cursor enters it.
+    if (t.closest('.tdoc-comment-pill') || t.closest('.tdoc-hover-outline')) return;
+    if (isInUI(t)) { hideHoverUI(); return; }
     const el = t.matches(COMMENTABLE) ? t : t.closest(COMMENTABLE);
-    if (el && !isInUI(el)) {
-      let anchored = false;
-      for (const mark of state.anchorMarks.values()) {
-        if (mark.targetEl === el) { anchored = true; break; }
-      }
-      showHoverOutline(el);
-      if (!anchored) showHoverHint(el); else hideHoverHint();
-    } else hideHoverOutline();
+    if (!el || isInUI(el)) { hideHoverUI(); return; }
+    // If element is already anchored by an existing comment, no pill — clicking
+    // the element should activate the existing comment instead.
+    let anchored = false;
+    for (const mark of state.anchorMarks.values()) {
+      if (mark.targetEl === el) { anchored = true; break; }
+    }
+    if (anchored) { hideHoverUI(); return; }
+    showHoverUI(el);
   });
   document.addEventListener('mouseout', (e) => {
-    if (!e.relatedTarget || isInUI(e.relatedTarget)) hideHoverOutline();
+    const next = e.relatedTarget;
+    if (!next) { hideHoverUI(); return; }
+    // Stay shown if cursor moves into the pill or outline.
+    if (next.closest && (next.closest('.tdoc-comment-pill') || next.closest('.tdoc-hover-outline'))) return;
+    // Stay shown if cursor moves to the same artifact (mouseover children).
+    if (pillTargetEl && next.closest && next.closest(COMMENTABLE) === pillTargetEl) return;
+    if (isInUI(next)) hideHoverUI();
   });
+  // Hide retained alias used elsewhere
+  function hideHoverOutline() { hideHoverUI(); }
+  function hideHoverHint() { /* no-op kept for legacy callers */ }
 
   // ========== Selection → popup ==========
   document.addEventListener('mouseup', (e) => {
