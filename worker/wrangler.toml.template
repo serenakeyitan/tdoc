@@ -1,0 +1,17 @@
+name = "tdoc-PLACEHOLDER_USER"
+main = "_worker.bundled.js"
+compatibility_date = "2025-01-01"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "DOCS"
+bucket_name = "tdoc-docs"
+
+[[kv_namespaces]]
+binding = "META"
+id = "PLACEHOLDER_KV_ID"
+
+[vars]
+GITHUB_CLIENT_ID = "Ov23liZ1UAGOchvKPmlS"
+
+# Secret: TDOC_UPLOAD_TOKEN — set via `wrangler secret put TDOC_UPLOAD_TOKEN`
