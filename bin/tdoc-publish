@@ -224,6 +224,19 @@ if [ -z "$PUBLIC_HOST" ]; then PUBLIC_HOST="${SUBDOMAIN}.workers.dev"; fi
 UPLOAD_BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
 PUBLIC_BASE="https://${PUBLIC_HOST}"
 
+# --- redeploy worker if overlay.js / worker.js is newer than the bundled file ---
+# Skipped via TDOC_SKIP_WORKER_DEPLOY=1 (useful for batch uploads in tests).
+BUNDLED="$WORKER_DIR/_worker.bundled.js"
+if [ "${TDOC_SKIP_WORKER_DEPLOY:-0}" != "1" ]; then
+  if [ ! -f "$BUNDLED" ] \
+    || [ "$SKILL_DIR/server/overlay.js" -nt "$BUNDLED" ] \
+    || [ "$SKILL_DIR/worker/worker.js" -nt "$BUNDLED" ]; then
+    echo "[tdoc] worker code changed locally — redeploying..."
+    SKILL_DIR="$SKILL_DIR" bundle_worker
+    (cd "$WORKER_DIR" && wrangler deploy)
+  fi
+fi
+
 # --- upload latest version of slug ---
 META_FILE="$DOC_DIR/meta.json"
 if [ ! -f "$META_FILE" ]; then
