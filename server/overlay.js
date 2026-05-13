@@ -1112,11 +1112,6 @@
     const sx = window.scrollX, sy = window.scrollY;
     for (const el of document.querySelectorAll(COMMENTABLE)) {
       if (isInUI(el)) continue;
-      let anchored = false;
-      for (const mark of state.anchorMarks.values()) {
-        if (mark.targetEl === el) { anchored = true; break; }
-      }
-      if (anchored) continue;
       const r = el.getBoundingClientRect();
       const pageRect = { left: r.left + sx, top: r.top + sy, right: r.right + sx, bottom: r.bottom + sy };
       if (rectsOverlap(pageRect, dragRect)) return el;
@@ -1257,13 +1252,11 @@
     if (isInUI(t)) { hideHoverUI(); return; }
     const el = t.matches(COMMENTABLE) ? t : t.closest(COMMENTABLE);
     if (!el || isInUI(el)) { hideHoverUI(); return; }
-    // If element is already anchored by an existing comment, no pill — clicking
-    // the element should activate the existing comment instead.
-    let anchored = false;
-    for (const mark of state.anchorMarks.values()) {
-      if (mark.targetEl === el) { anchored = true; break; }
-    }
-    if (anchored) { hideHoverUI(); return; }
+    // Show the pill on EVERY commentable artifact, including those already
+    // anchored by an existing comment. Multiple comments on one artifact is
+    // a normal pattern (e.g. several reviewers commenting on the same image).
+    // The pill is in the top-right corner; clicking the artifact body still
+    // activates any existing comment as a separate gesture.
     showHoverUI(el);
   });
   document.addEventListener('mouseout', (e) => {
