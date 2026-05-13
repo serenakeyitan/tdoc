@@ -1,0 +1,34 @@
+{
+  "name": "tdoc",
+  "version": "0.1.0",
+  "description": "Prompt-native interactive HTML docs — open-source community implementation of Jesse Pollak's bdocs idea. Generate self-contained HTML from a prompt, comment on text + artifacts, publish to your own Cloudflare Worker for free always-on sharing.",
+  "homepage": "https://github.com/serenakeyitan/tdoc",
+  "license": "MIT",
+  "author": {
+    "name": "Serena Keyitan",
+    "url": "https://github.com/serenakeyitan"
+  },
+  "credits": {
+    "inspiration": {
+      "name": "Jesse Pollak",
+      "project": "bdocs (Coinbase)",
+      "url": "https://x.com/jessepollak/status/2054313757543964857",
+      "note": "All credit to Jesse for the original concept and framing. tdoc is an open-source community take, not a port."
+    }
+  },
+  "keywords": [
+    "html",
+    "docs",
+    "documents",
+    "comments",
+    "cloudflare",
+    "workers",
+    "bdocs",
+    "prompt-native",
+    "interactive"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/serenakeyitan/tdoc"
+  }
+}
