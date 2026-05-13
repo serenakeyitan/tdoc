@@ -12,14 +12,19 @@
 
 Install + onboarding takes ~3 minutes on a clean machine. Most steps are automatic. The user only has to click ~2 things in a browser.
 
-## Step 1 — Install the skill
+## Step 1 — Install the skill (if not already installed)
 
-Pick the install path that matches what the user already has set up:
-
-### Path A: plain `git clone` (recommended, simplest)
+First check whether the user has already installed via the plugin marketplace. The marketplace install is a separate path the user runs themselves (`/plugin marketplace add serenakeyitan/tdoc`) and does NOT need you to clone anything.
 
 ```bash
-# Get the latest from main (always the current release)
+ls ~/.claude/skills/tdoc/SKILL.md 2>/dev/null && echo "already installed"
+```
+
+If that prints "already installed" → skip to Step 2.
+
+Otherwise, the user reached this doc via Option B or Option C and you need to clone:
+
+```bash
 git clone https://github.com/serenakeyitan/tdoc ~/.claude/skills/tdoc
 ```
 
@@ -29,18 +34,16 @@ If the user already has `~/.claude/skills/tdoc/` from a prior install, update in
 cd ~/.claude/skills/tdoc && git pull --ff-only origin main
 ```
 
-### Path B: Claude Code plugin marketplace
-
-If the user said "via marketplace" / "plugin install" / "use Path B" in their prompt, run these in Claude Code:
+**Important about the plugin marketplace path:** if the user said they want the "one-line marketplace install," that's a direct slash-command they run themselves in Claude Code — NOT an agent task. The two commands are:
 
 ```
 /plugin marketplace add serenakeyitan/tdoc
 /plugin install tdoc@serenakeyitan-tdoc
 ```
 
-Functionally equivalent to Path A — Claude Code tracks updates as a managed plugin instead of a plain clone. Default to Path A unless the user explicitly asked for the marketplace path.
+Don't try to run these for the user via Bash — they're Claude Code slash commands.
 
-(Future: once Anthropic accepts `tdoc` into the official marketplace, the canonical install will be `/plugin install tdoc@claude-plugins-official`. Until then, the line above is the canonical install.)
+(Future: once Anthropic accepts `tdoc` into the official marketplace, the canonical install becomes `/plugin install tdoc@claude-plugins-official`. Until then, the lines above are canonical.)
 
 ## Step 2 — Verify install
 

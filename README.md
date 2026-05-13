@@ -31,17 +31,23 @@ The best documents are often interactive HTML — live models with sliders, SVG 
 
 ## Install
 
-### Option A — Have your agent do it (recommended)
+### Option A — One-line install via Claude Code plugin marketplace
+
+In Claude Code, run:
+
+```
+/plugin marketplace add serenakeyitan/tdoc
+```
+
+This installs `tdoc` as a managed plugin. Then in any Claude Code session, say `/tdoc onboard` and the agent finishes the rest of the setup (Cloudflare, etc.) in ~3 minutes.
+
+### Option B — Have your agent install + onboard you
 
 Paste this into Claude Code or Codex:
 
 > Install tdoc by following https://github.com/serenakeyitan/tdoc/blob/main/ONBOARDING.md
 
-That's the whole prompt. The agent reads the doc, does the rest. ~3 minutes, hands-free except for ~2 browser clicks the agent will explicitly ask you to do.
-
-### Option B — Plugin marketplace
-
-> Install tdoc via plugin marketplace: https://github.com/serenakeyitan/tdoc/blob/main/ONBOARDING.md (use Path B)
+That's the whole prompt. The agent reads the doc, clones the repo, runs the doctor, walks you through ~2 browser clicks, and ends with a published live URL.
 
 ### Option C — Manual one-liner
 
