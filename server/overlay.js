@@ -316,43 +316,53 @@
   body.tdoc-doc-dark .tdoc-footer a { color: #999; }
   body.tdoc-doc-dark .tdoc-footer a:hover { color: #8ab0ff; }
   body.tdoc-doc-dark .tdoc-footer .sep { color: #3a3a3a; }
-  @media (prefers-color-scheme: dark) {
-    .tdoc-margin-comment { background: #161616; border-color: #2a2a2a; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
-    .tdoc-margin-comment.active { box-shadow: 0 4px 16px rgba(22,82,240,0.35); border-color: #1652f0; }
-    .tdoc-margin-comment.tdoc-unanchored::before { color: #777; }
-    .tdoc-margin-comment .author .login, .tdoc-margin-comment .text { color: #e5e5e5; }
-    .tdoc-margin-comment .author .anon, .tdoc-margin-comment .meta, .tdoc-margin-comment .copy-md { color: #888; }
-    .tdoc-margin-comment .del, .tdoc-reply .del { color: #ff6b6b; }
-    .tdoc-margin-comment .copy-md:hover, .tdoc-margin-comment .tdoc-reply-toggle, .tdoc-replies-toggle, .tdoc-emoji-picker button.tdoc-emoji-text, .tdoc-react-add:hover { color: #4a8cff; }
-    .tdoc-react-chip { background: #1f1f1f; border-color: #2e2e2e; color: #d0d0d0; }
-    .tdoc-react-chip:hover { background: #262626; }
-    .tdoc-react-chip.mine { background: rgba(22,82,240,0.18); border-color: #1652f0; color: #8ab0ff; }
-    .tdoc-react-add { color: #777; }
-    .tdoc-emoji-picker { background: #161616; border-color: #2a2a2a; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
-    .tdoc-emoji-picker button:hover { background: #262626; }
-    .tdoc-emoji-picker button.tdoc-emoji-text:hover { background: rgba(22,82,240,0.18); }
-    .tdoc-replies-toggle { border-top-color: #2a2a2a; }
-    .tdoc-reply { border-left-color: #2a2a2a; }
-    .tdoc-reply .author .login { color: #e5e5e5; }
-    .tdoc-reply .author .anon, .tdoc-reply .meta { color: #888; }
-    .tdoc-reply .text { color: #d0d0d0; }
-    .tdoc-reply-form { border-top-color: #2a2a2a; }
-    .tdoc-reply-form textarea { background: #0f0f0f; color: #e5e5e5; border-color: #2a2a2a; }
-    .tdoc-reply-form textarea:focus { border-color: #1652f0; }
-    .tdoc-modal { background: #161616; color: #e5e5e5; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
-    .tdoc-modal p, .tdoc-modal .step { color: #b8b8b8; }
-    .tdoc-modal button { background: #1f1f1f; border-color: #2a2a2a; color: #e5e5e5; }
-    .tdoc-modal button.primary { background: #1652f0; border-color: #1652f0; color: #fff; }
-    .tdoc-modal button.primary:hover { background: #1245d0; }
-    .tdoc-modal .status { color: #888; }
-    /* Publish/Share modal helpers in dark mode */
-    .tdoc-modal .muted { color: #999; }
-    .tdoc-modal .divider { border-top-color: #2a2a2a; }
-    .tdoc-modal .danger { color: #ff7a7a; }
-    .tdoc-modal code { background: #0f0f0f; color: #e5e5e5; }
-    body.tdoc-narrow #tdoc-comment-layer { background: #0f0f0f; border-top-color: #2a2a2a; box-shadow: 0 -4px 24px rgba(0,0,0,0.6); }
-    body.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { background: #444; }
-  }
+  /* Overlay chrome (cards, popup, modal, drawer, picker) goes dark ONLY when
+     the doc itself is dark. We deliberately ignore prefers-color-scheme here:
+     having dark cards float on a white doc looks broken; having light cards on
+     a dark doc looks broken. Match what the doc actually paints. */
+  body.tdoc-doc-dark .tdoc-margin-comment { background: #161616; border-color: #2a2a2a; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+  body.tdoc-doc-dark .tdoc-margin-comment.active { box-shadow: 0 4px 16px rgba(22,82,240,0.35); border-color: #1652f0; }
+  body.tdoc-doc-dark .tdoc-margin-comment.tdoc-unanchored::before { color: #777; }
+  body.tdoc-doc-dark .tdoc-margin-comment .author .login,
+  body.tdoc-doc-dark .tdoc-margin-comment .text { color: #e5e5e5; }
+  body.tdoc-doc-dark .tdoc-margin-comment .author .anon,
+  body.tdoc-doc-dark .tdoc-margin-comment .meta,
+  body.tdoc-doc-dark .tdoc-margin-comment .copy-md { color: #888; }
+  body.tdoc-doc-dark .tdoc-margin-comment .del,
+  body.tdoc-doc-dark .tdoc-reply .del { color: #ff6b6b; }
+  body.tdoc-doc-dark .tdoc-margin-comment .copy-md:hover,
+  body.tdoc-doc-dark .tdoc-margin-comment .tdoc-reply-toggle,
+  body.tdoc-doc-dark .tdoc-replies-toggle,
+  body.tdoc-doc-dark .tdoc-emoji-picker button.tdoc-emoji-text,
+  body.tdoc-doc-dark .tdoc-react-add:hover { color: #4a8cff; }
+  body.tdoc-doc-dark .tdoc-react-chip { background: #1f1f1f; border-color: #2e2e2e; color: #d0d0d0; }
+  body.tdoc-doc-dark .tdoc-react-chip:hover { background: #262626; }
+  body.tdoc-doc-dark .tdoc-react-chip.mine { background: rgba(22,82,240,0.18); border-color: #1652f0; color: #8ab0ff; }
+  body.tdoc-doc-dark .tdoc-react-add { color: #777; }
+  body.tdoc-doc-dark .tdoc-emoji-picker { background: #161616; border-color: #2a2a2a; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  body.tdoc-doc-dark .tdoc-emoji-picker button:hover { background: #262626; }
+  body.tdoc-doc-dark .tdoc-emoji-picker button.tdoc-emoji-text:hover { background: rgba(22,82,240,0.18); }
+  body.tdoc-doc-dark .tdoc-replies-toggle { border-top-color: #2a2a2a; }
+  body.tdoc-doc-dark .tdoc-reply { border-left-color: #2a2a2a; }
+  body.tdoc-doc-dark .tdoc-reply .author .login { color: #e5e5e5; }
+  body.tdoc-doc-dark .tdoc-reply .author .anon,
+  body.tdoc-doc-dark .tdoc-reply .meta { color: #888; }
+  body.tdoc-doc-dark .tdoc-reply .text { color: #d0d0d0; }
+  body.tdoc-doc-dark .tdoc-reply-form { border-top-color: #2a2a2a; }
+  body.tdoc-doc-dark .tdoc-reply-form textarea { background: #0f0f0f; color: #e5e5e5; border-color: #2a2a2a; }
+  body.tdoc-doc-dark .tdoc-reply-form textarea:focus { border-color: #1652f0; }
+  body.tdoc-doc-dark .tdoc-modal { background: #161616; color: #e5e5e5; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+  body.tdoc-doc-dark .tdoc-modal p, body.tdoc-doc-dark .tdoc-modal .step { color: #b8b8b8; }
+  body.tdoc-doc-dark .tdoc-modal button { background: #1f1f1f; border-color: #2a2a2a; color: #e5e5e5; }
+  body.tdoc-doc-dark .tdoc-modal button.primary { background: #1652f0; border-color: #1652f0; color: #fff; }
+  body.tdoc-doc-dark .tdoc-modal button.primary:hover { background: #1245d0; }
+  body.tdoc-doc-dark .tdoc-modal .status { color: #888; }
+  body.tdoc-doc-dark .tdoc-modal .muted { color: #999; }
+  body.tdoc-doc-dark .tdoc-modal .divider { border-top-color: #2a2a2a; }
+  body.tdoc-doc-dark .tdoc-modal .danger { color: #ff7a7a; }
+  body.tdoc-doc-dark .tdoc-modal code { background: #0f0f0f; color: #e5e5e5; }
+  body.tdoc-doc-dark.tdoc-narrow #tdoc-comment-layer { background: #0f0f0f; border-top-color: #2a2a2a; box-shadow: 0 -4px 24px rgba(0,0,0,0.6); }
+  body.tdoc-doc-dark.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { background: #444; }
   `;
   const style = document.createElement('style');
   style.textContent = css;

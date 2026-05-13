@@ -1,10 +1,17 @@
-// Dark-mode test. Loads the live worker with prefers-color-scheme: dark and
-// asserts the overlay primitives swap to a dark palette:
+// Dark-mode test. Loads the live worker, force-toggles body.tdoc-doc-dark to
+// simulate a dark document, and asserts the overlay primitives swap to a
+// dark palette to MATCH the doc:
 //   - Comment card has a dark background (not white)
 //   - Comment card text is light
 //   - Footer is visible with low-opacity light text
-//   - Footer links are clickable (programmatic click works)
+//   - Footer links are clickable
 //   - Top bar remains dark (already was)
+//
+// We force-toggle the class because:
+//   (a) the demo doc on the worker is light;
+//   (b) v0.1.20+ stopped tying overlay dark mode to OS preference — the
+//       overlay only goes dark when the DOC is dark. So setting
+//       colorScheme:'dark' on the browser context isn't enough.
 //
 // Run: NODE_PATH=/private/tmp/node_modules node test/dark-mode.test.js
 
@@ -40,11 +47,16 @@ const viewports = [
     console.log(`--- ${v.name} (${v.width}×${v.height}) ---`);
     const ctx = await browser.newContext({
       viewport: { width: v.width, height: v.height },
-      colorScheme: 'dark',
     });
     const page = await ctx.newPage();
     await page.goto(URL, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => document.querySelector('.tdoc-margin-comment') !== null, null, { timeout: 6000 }).catch(() => {});
+    // Force "this doc is dark" so the overlay paints its dark-mode chrome.
+    await page.evaluate(() => {
+      document.body.style.background = '#0a0a0a';
+      document.body.style.color = '#e5e5e5';
+      document.body.classList.add('tdoc-doc-dark');
+    });
     await page.waitForTimeout(400);
 
     await t('comment card has dark background', async () => {
