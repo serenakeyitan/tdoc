@@ -16,7 +16,15 @@ Authoring is a prompt. The document is a build artifact, not something you maint
 git clone https://github.com/serenakeyitan/tdoc ~/.claude/skills/tdoc
 ```
 
-Then in Claude Code: `/tdoc new <your prompt>`.
+Then in Claude Code (or Codex) just say:
+
+```
+/tdoc onboard
+```
+
+The agent reads `bin/tdoc-doctor`, installs anything missing (Node 18+, wrangler, jq), guides you through Cloudflare setup (free), and offers to publish a sample doc. Smooth from zero to live URL in ~3 minutes.
+
+For local-only use (no Cloudflare): just `/tdoc new <prompt>` works immediately, no setup.
 
 ## Commands
 
@@ -48,12 +56,22 @@ Subsequent runs upload to the existing Worker.
 - `/tdoc pull <slug>` — sync comments from the published Worker back to local
 - `/tdoc unpublish <slug>` — remove a published doc from R2/KV
 
+### Setup & maintenance
+
+- `/tdoc onboard` — guided setup. Agent runs the doctor, installs missing deps, walks you through any browser-side clicks (R2 enable, subdomain claim), then offers to publish a sample doc. Idempotent — safe to re-run.
+- `/tdoc doctor` — non-destructive health check. Prints JSON describing every dep + every Cloudflare resource. Use when something feels off.
+- `/tdoc update` — git fetch + fast-forward pull from `origin/main`. Stashes local edits, restores them after.
+  - `tdoc-update --check` → preview incoming commits
+  - `tdoc-update --yes` → also redeploy your Worker so users see the new overlay
+
 ### Requirements
 
 - Node 18+
 - `wrangler` (for publishing) — `npm i -g wrangler`
 - `jq` (for publishing)
 - A free [Cloudflare](https://dash.cloudflare.com) account with R2 enabled (one-time click)
+
+`/tdoc onboard` checks and installs all of these for you.
 
 ## How comments work
 
@@ -66,23 +84,44 @@ Subsequent runs upload to the existing Worker.
 
 ```
 ~/.claude/skills/tdoc/
-  SKILL.md          — Claude Code skill manifest
+  SKILL.md            — Claude Code skill manifest
   server/
-    server.js       — local HTTP server (Node, no deps)
-    overlay.js      — injected into every served doc; comment UI + auth flow
+    server.js         — local HTTP server (Node, no deps)
+    overlay.js        — injected into every served doc; comment UI + auth flow
   worker/
-    worker.js       — Cloudflare Worker (Workers runtime; no Node)
+    worker.js         — Cloudflare Worker (Workers runtime; no Node)
     wrangler.toml.template
   bin/
-    tdoc-publish    — first-time setup + upload doc
-    tdoc-pull       — pull comments from KV → local
-    tdoc-unpublish  — delete from R2/KV
+    tdoc-doctor       — non-destructive health probe (JSON output)
+    tdoc-publish      — first-time setup + upload doc
+    tdoc-pull         — pull comments from KV → local
+    tdoc-unpublish    — delete from R2/KV
+    tdoc-update       — git pull origin/main + optional redeploy
   test/
-    ui.test.js      — Playwright UI tests against the deployed Worker
-    api.test.js     — local HTTP API tests
+    ui.test.js        — Playwright UI tests against the deployed Worker
+    api.test.js       — local HTTP API tests
+    onboarding.test.js — mocked doctor scenarios + gated real round-trip
 ```
 
 Per-user runtime data lives at `~/tdocs/` (docs) and `~/.tdoc/` (publish config). Both are excluded from the repo.
+
+## Testing
+
+```bash
+# Unit / API tests against a running local server
+node test/api.test.js
+
+# UI tests against the deployed worker
+node test/ui.test.js
+
+# Onboarding scenarios (mocked — fast, deterministic)
+node test/onboarding.test.js
+
+# Onboarding + real Cloudflare round-trip (creates and deletes a throwaway doc on your account)
+TDOC_INTEGRATION=1 node test/onboarding.test.js
+```
+
+Mock states for `tdoc-doctor` are controlled by env vars (`TDOC_MOCK_NO_WRANGLER`, `TDOC_MOCK_NO_R2`, etc.) — see `bin/tdoc-doctor` for the full list.
 
 ## License
 

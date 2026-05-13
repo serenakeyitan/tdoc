@@ -5,8 +5,11 @@ description: |
   self-contained HTML documents from a prompt (interactive models, SVG
   diagrams, simulations, strategy docs), serve them at localhost with
   text-anchored inline commenting, and regenerate new versions from comments.
+  Also publishes to Cloudflare Workers for free always-on sharing with GitHub
+  Device-Flow auth on comments.
   Use when: "tdoc", "new doc", "interactive doc", "make a doc that...",
-  "publish html doc", "comment on doc", "fork doc".
+  "publish html doc", "comment on doc", "fork doc", "tdoc onboard",
+  "tdoc update", "tdoc doctor", "set up tdoc", "tdoc health check".
 allowed-tools:
   - Bash
   - Read
