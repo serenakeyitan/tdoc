@@ -301,6 +301,27 @@
     .tdoc-emoji-picker button { width: 40px; height: 40px; font-size: 22px; }
     .tdoc-emoji-picker button.tdoc-emoji-text { grid-column: span 5; }
   }
+
+  /* ============ FOOTER ============
+     Default tdoc footer appended to every doc. Subtle, low-contrast, real
+     element at the bottom of the scrollable doc (NOT fixed). */
+  .tdoc-footer { margin-top: 80px; padding: 20px 16px 28px; font: 12px system-ui, sans-serif;
+    color: #888; text-align: center; border-top: 1px solid #eee; box-sizing: border-box;
+    max-width: 100%; }
+  .tdoc-footer .tdoc-footer-row { display: inline-flex; flex-wrap: wrap; gap: 8px;
+    align-items: center; justify-content: center; row-gap: 4px; }
+  .tdoc-footer a { color: #666; text-decoration: none; }
+  .tdoc-footer a:hover { color: #1652f0; text-decoration: underline; }
+  .tdoc-footer .sep { color: #ccc; }
+  /* On narrow screens, stack the row vertically so each link gets its own line
+     and links never overflow horizontally. */
+  @media (max-width: 700px) {
+    .tdoc-footer .tdoc-footer-row { flex-direction: column; gap: 4px; }
+    .tdoc-footer .sep { display: none; }
+  }
+  /* Reserve a tiny bottom padding on the body so the footer never sits flush
+     against the viewport edge when the doc is short. */
+  body { padding-bottom: 24px; }
   `;
   const style = document.createElement('style');
   style.textContent = css;
@@ -430,6 +451,22 @@
   };
   document.body.appendChild(fab);
 
+  // --- default footer ---
+  // Subtle, real (non-fixed) footer at the bottom of every tdoc-served doc.
+  // Inspired-by credit to Jesse Pollak's bdocs. Sits in normal flow so it
+  // scrolls with the doc and never overlaps the article column.
+  const footer = document.createElement('footer');
+  footer.className = 'tdoc-footer';
+  footer.innerHTML =
+    '<div class="tdoc-footer-row">' +
+      '<a href="https://github.com/serenakeyitan/tdoc" target="_blank" rel="noopener">github.com/serenakeyitan/tdoc</a>' +
+      '<span class="sep">·</span>' +
+      '<span>built with <a href="https://github.com/serenakeyitan/tdoc" target="_blank" rel="noopener">tdoc</a></span>' +
+      '<span class="sep">·</span>' +
+      '<span>inspired by <a href="https://x.com/jessepollak/status/2054313757543964857" target="_blank" rel="noopener">bdocs by @jessepollak</a></span>' +
+    '</div>';
+  document.body.appendChild(footer);
+
   // Tapping the handle closes the drawer.
   drawerHandle.onclick = (e) => {
     e.stopPropagation();
@@ -501,7 +538,7 @@
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
         if (!n.parentElement) return NodeFilter.FILTER_REJECT;
-        if (n.parentElement.closest('.tdoc-bar, .tdoc-popup, .tdoc-modal-bg, #tdoc-comment-layer')) return NodeFilter.FILTER_REJECT;
+        if (n.parentElement.closest('.tdoc-bar, .tdoc-popup, .tdoc-modal-bg, #tdoc-comment-layer, .tdoc-footer')) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -780,7 +817,7 @@
     let bestRight = 0;
     let bestWidth = 0;
     for (const el of candidates) {
-      if (el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment')) continue;
+      if (el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-footer')) continue;
       const r = el.getBoundingClientRect();
       if (r.width > bestWidth && r.width > 200 && r.width < window.innerWidth) {
         bestWidth = r.width;
@@ -1008,7 +1045,7 @@
     let best = null;
     let bestWidth = 0;
     for (const el of candidates) {
-      if (el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, #tdoc-comment-layer')) continue;
+      if (el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, #tdoc-comment-layer, .tdoc-footer')) continue;
       const r = el.getBoundingClientRect();
       if (r.width > bestWidth && r.width > 200) { best = el; bestWidth = r.width; }
     }
@@ -1125,7 +1162,7 @@
   // Selectors for elements that can host an element-anchored comment.
   const COMMENTABLE = 'img, svg, canvas, video, pre, figure, iframe[src]';
   function isInUI(el) {
-    return el.closest && el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-hover-outline, #tdoc-comment-layer');
+    return el.closest && el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-hover-outline, #tdoc-comment-layer, .tdoc-footer');
   }
 
   document.addEventListener('mouseup', (e) => {
@@ -1613,7 +1650,7 @@
   window.__tdocCopyDocMd = async function (includeComments) {
     // Clone body and strip our UI + scripts/styles before converting
     const clone = document.body.cloneNode(true);
-    clone.querySelectorAll('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-element-outline, .tdoc-hover-outline, #tdoc-comment-layer, script, style, noscript').forEach(n => n.remove());
+    clone.querySelectorAll('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-element-outline, .tdoc-hover-outline, #tdoc-comment-layer, .tdoc-footer, script, style, noscript').forEach(n => n.remove());
     let md = htmlToMarkdown(clone);
     if (includeComments && activeComments.length) {
       md += '\n\n---\n\n## Comments\n\n' + activeComments.map(commentToMd).join('\n---\n\n');
