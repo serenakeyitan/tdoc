@@ -33,42 +33,25 @@ The best documents are often interactive HTML — live models with sliders, SVG 
 
 ### Option A — Have your agent do it (recommended)
 
-Open Claude Code (or Codex). Copy and paste this into the chat:
+Paste this into Claude Code or Codex:
 
-> Install the tdoc skill from the latest release at https://github.com/serenakeyitan/tdoc. Read https://github.com/serenakeyitan/tdoc/blob/main/ONBOARDING.md end-to-end first, then follow every step. Run `bin/tdoc-doctor` between steps to verify state, walk me through any clicks I need to do in a browser, and finish by publishing a sample doc so I have a real live URL. Don't skip anything.
+> Install tdoc by following https://github.com/serenakeyitan/tdoc/blob/main/ONBOARDING.md
 
-The agent will clone the repo, run the doctor, install missing dependencies, guide you through Cloudflare setup (~2 clicks total), and end with a published live document. **Zero to live URL in about 3 minutes**, hands-free except for the browser clicks the agent will explicitly ask you to do.
+That's the whole prompt. The agent reads the doc, does the rest. ~3 minutes, hands-free except for ~2 browser clicks the agent will explicitly ask you to do.
 
-### Option B — Install via Claude Code plugin marketplace
+### Option B — Plugin marketplace
 
-If you prefer the managed-plugin path, paste this into your agent instead:
+> Install tdoc via plugin marketplace: https://github.com/serenakeyitan/tdoc/blob/main/ONBOARDING.md (use Path B)
 
-> Install the tdoc plugin via the Claude Code plugin marketplace at github.com/serenakeyitan/tdoc. Run `/plugin marketplace add serenakeyitan/tdoc` then `/plugin install tdoc@serenakeyitan-tdoc`. After install, read https://github.com/serenakeyitan/tdoc/blob/main/ONBOARDING.md and follow steps 3 onward to finish onboarding.
-
-The agent will run:
-
-```
-/plugin marketplace add serenakeyitan/tdoc
-/plugin install tdoc@serenakeyitan-tdoc
-```
-
-Once Anthropic accepts `tdoc` into the official marketplace, this becomes:
-
-```
-/plugin install tdoc@claude-plugins-official
-```
-
-### Option C — Manual one-liner (no agent needed)
+### Option C — Manual one-liner
 
 ```bash
 git clone https://github.com/serenakeyitan/tdoc ~/.claude/skills/tdoc && echo "Now open Claude Code and run: /tdoc onboard"
 ```
 
-Then in Claude Code: `/tdoc onboard`. Same outcome as Option A; the agent reads `ONBOARDING.md` and does the rest.
-
 ### Local-only (no Cloudflare)
 
-If you only want to use `tdoc` locally without publishing anywhere: install via any option above, then just run `/tdoc new <prompt>` — local docs require zero setup beyond Node 18+.
+After any install: `/tdoc new <prompt>`. No setup beyond Node 18+.
 
 ## Commands
 

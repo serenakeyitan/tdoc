@@ -31,14 +31,16 @@ cd ~/.claude/skills/tdoc && git pull --ff-only origin main
 
 ### Path B: Claude Code plugin marketplace
 
-If the user prefers the managed-plugin route:
+If the user said "via marketplace" / "plugin install" / "use Path B" in their prompt, run these in Claude Code:
 
 ```
 /plugin marketplace add serenakeyitan/tdoc
 /plugin install tdoc@serenakeyitan-tdoc
 ```
 
-This is functionally equivalent to Path A but lets Claude Code track updates as a registered plugin. Use this if the user said "install via marketplace" or "plugin install."
+Functionally equivalent to Path A — Claude Code tracks updates as a managed plugin instead of a plain clone. Default to Path A unless the user explicitly asked for the marketplace path.
+
+(Future: once Anthropic accepts `tdoc` into the official marketplace, the canonical install will be `/plugin install tdoc@claude-plugins-official`. Until then, the line above is the canonical install.)
 
 ## Step 2 — Verify install
 
