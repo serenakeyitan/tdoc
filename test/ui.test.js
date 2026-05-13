@@ -307,14 +307,16 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     if (!text.includes('Share')) throw new Error(`label was "${text}"`);
   });
 
-  await t('Click Share opens modal with URL + Copy + Open buttons', async () => {
+  await t('Click Share opens modal with URL + Copy button', async () => {
     await page.click('#tdoc-share-btn');
     await page.waitForSelector('#tdoc-aux-modal', { timeout: 2000 });
     const url = await page.$eval('#tdoc-share-url', el => el.textContent.trim());
     if (!url.startsWith('http')) throw new Error(`url didn't look right: "${url}"`);
     const copyBtn = await page.$('#tdoc-share-copy');
+    if (!copyBtn) throw new Error('Share modal missing Copy button');
+    // "Open in new tab" was removed in v0.1.16 — explicitly assert it's gone.
     const openBtn = await page.$('#tdoc-share-open');
-    if (!copyBtn || !openBtn) throw new Error('Share modal missing Copy/Open buttons');
+    if (openBtn) throw new Error('Share modal still has stale Open-in-new-tab button');
     const unpub = await page.$('#tdoc-share-unpub');
     if (!unpub) throw new Error('Share modal missing unpublish hint');
     const unpubText = await unpub.textContent();

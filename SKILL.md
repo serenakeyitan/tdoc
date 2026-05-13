@@ -262,6 +262,22 @@ which dep / Cloudflare resource is missing.
 - Prefer SVG over canvas for diagrams (commentable text). Use canvas for heavy simulations.
 - Default font stack: `system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`. Mono: `ui-monospace, "SF Mono", Menlo, monospace`.
 
+### Responsive defaults (REQUIRED)
+
+Every doc must work on mobile out of the box. The overlay injects defensive CSS for artifacts, but the doc itself should also be authored responsively:
+
+- **Always include** `<meta name="viewport" content="width=device-width, initial-scale=1">` in `<head>`. (The overlay injects this if you forget, but include it.)
+- **Use fluid widths**, not hardcoded pixels. Container: `max-width: 720px; width: 100%; margin: 0 auto; padding: 0 16px;`.
+- **Canvas / SVG / images**: do NOT hardcode width=N height=M. Either:
+  - Use `width="100%"` + CSS aspect-ratio (`aspect-ratio: 16/9`), or
+  - Use a `<div class="wrap">` with `max-width: 100%` and let the artifact scale.
+  - For canvas, set `width` and `height` attributes for the drawing buffer but ALSO `style="max-width:100%;height:auto"` so it scales down on narrow screens. Recompute the drawing buffer on resize if needed.
+- **Tables**: wrap in `<div style="overflow-x:auto">` so they scroll instead of overflowing.
+- **Code blocks (`<pre>`)**: `max-width: 100%; overflow-x: auto;`.
+- **Test at 375px wide** in your head before claiming done. If anything overflows the viewport on a phone, fix it before writing meta.json.
+
+The overlay applies these as `:where()` defensive defaults so old docs degrade gracefully, but new docs should bake responsiveness in.
+
 ## Comment anchoring
 
 Comments are persisted with:

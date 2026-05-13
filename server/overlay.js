@@ -63,6 +63,22 @@
   body p,body h1,body h2,body h3,body h4,body h5,body h6,body li,body blockquote,body pre,body code,body figcaption,body th,body td,body dt,body dd,body summary,body span,body em,body strong,body i,body b,body u,body s,body a,body small,body sub,body sup,body mark,body textarea,body input[type="text"],body input[type="search"],body [contenteditable] { -webkit-user-select: text; user-select: text; }
   body.tdoc-has-comments:not(.tdoc-narrow) { padding-right: 320px !important; }
   body.tdoc-narrow { padding-right: 0 !important; }
+  /* Defensive responsive defaults for artifacts. Docs sometimes hardcode pixel
+     widths (e.g. <canvas width="640">) that overflow on phones. These rules
+     constrain every artifact to its container width without changing its
+     aspect ratio. Wrapped in :where() so the doc's own CSS wins if specified. */
+  :where(body img, body video, body iframe, body svg, body canvas) {
+    max-width: 100% !important;
+    height: auto;
+    box-sizing: border-box;
+  }
+  /* Canvas needs special handling: scaling its CSS size doesn't change its
+     drawing-buffer size, but at least the box won't overflow. */
+  :where(body canvas) { display: block; }
+  /* Wide tables become horizontally scrollable rather than overflowing. */
+  :where(body table) { display: block; max-width: 100%; overflow-x: auto; }
+  /* Pre/code blocks scroll horizontally instead of breaking the layout. */
+  :where(body pre) { max-width: 100%; overflow-x: auto; }
 
   /* Top bar */
   .tdoc-bar { position: fixed; top: 0; left: 0; right: 0; height: 44px; background: #0a0a0a; color: #fff; display: flex; align-items: center; padding: 0 16px; font: 13px system-ui, sans-serif; z-index: 999999; gap: 12px; }
@@ -438,15 +454,41 @@
   // Fork: opens the renderable /fork view in a new tab AND triggers a download
   // (one click, both happen). We use a hidden iframe to fire the download so
   // the user keeps focus on the new fork tab.
-  function forkAndDownload() {
+  async function forkAndDownload() {
+    // Fetch the fork HTML once, then both download AND open it via a blob URL.
+    // This way the new tab shows exactly the SAME bytes the user has on disk —
+    // a real local copy, not the worker-hosted /fork page. Self-contained:
+    // closing the tab doesn't lose the file, and the tab has no worker
+    // dependency (uses blob: not https:).
     const base = `/d/${encodeURIComponent(slug)}/v/${version}`;
-    window.open(`${base}/fork`, '_blank');
-    // hidden iframe → triggers the attachment download w/o stealing focus
-    const f = document.createElement('iframe');
-    f.style.display = 'none';
-    f.src = `${base}/export?download=1`;
-    document.body.appendChild(f);
-    setTimeout(() => f.remove(), 8000);
+    let bodyText;
+    try {
+      const resp = await fetch(`${base}/fork`);
+      if (!resp.ok) throw new Error(`fork fetch failed: ${resp.status}`);
+      bodyText = await resp.text();
+    } catch (e) {
+      // Fallback: old behavior (let the worker route handle download)
+      window.location.href = `${base}/export?download=1`;
+      return;
+    }
+    const blob = new Blob([bodyText], { type: 'text/html;charset=utf-8' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    // 1. Trigger the file download via <a download>.
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = `${slug}-v${version}-fork.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    // 2. Open the same blob in a new tab so the user sees their fork rendered.
+    //    Small delay so the download starts before the new tab steals focus.
+    setTimeout(() => {
+      window.open(blobUrl, '_blank');
+      // Revoke after a generous interval — the new tab may still be parsing.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    }, 250);
   }
   if (isPublished) {
     const fb = document.getElementById('tdoc-fork-btn');
@@ -865,6 +907,9 @@
   }
 
   function repositionCards() {
+    // Always reposition element outlines first — they should track their
+    // anchor element on every layout change regardless of narrow/wide mode.
+    document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(o => o._reposition?.());
     if (state.narrow) {
       for (const card of state.cardEls.values()) { card.style.top = ''; card.style.left = ''; }
       return;
@@ -908,8 +953,6 @@
       card.classList.add('tdoc-unanchored');
       prevBottom = y + card.offsetHeight;
     }
-    // Reposition element outlines
-    document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(o => o._reposition?.());
   }
 
   function setActiveComment(id) {
@@ -1188,7 +1231,6 @@
         <div class="code" id="tdoc-share-url" style="font-size:14px;letter-spacing:0;text-align:left;cursor:copy;">${escapeHtml(url)}</div>
         <div class="actions" style="justify-content:flex-start;gap:8px;margin-top:0;margin-bottom:10px;">
           <button class="primary" id="tdoc-share-copy">Copy link</button>
-          <button id="tdoc-share-open">Open in new tab</button>
         </div>
         <p class="muted">Anyone with this link can read. To comment, they sign in with GitHub.</p>
         <div class="divider">
@@ -1201,7 +1243,6 @@
     document.body.appendChild(bg);
     document.getElementById('tdoc-share-close').onclick = closeAuxModal;
     document.getElementById('tdoc-share-copy').onclick = () => navigator.clipboard?.writeText(url);
-    document.getElementById('tdoc-share-open').onclick = () => window.open(url, '_blank');
     document.getElementById('tdoc-share-url').onclick = () => navigator.clipboard?.writeText(url);
     document.getElementById('tdoc-share-unpub').onclick = (e) => {
       navigator.clipboard?.writeText(e.currentTarget.textContent);
