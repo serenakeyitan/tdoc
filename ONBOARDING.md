@@ -109,7 +109,9 @@ Don't surprise the user — explain briefly *why* before you ask them to click.
 
 ## Step 5 — Offer a sample doc
 
-When `ready_to_publish` is `true`, offer to publish a sample. A reasonable default:
+**Skip this step entirely if `published.ok` is already `true` in the doctor output** — the user already has a published doc and onboarding is done. Tell them so and proceed to Step 6.
+
+Otherwise, when `ready_to_publish` is `true` and the user has no published doc yet, offer to publish a sample. A reasonable default (note: respect `TDOC_DIR` env var if set; defaults to `~/tdocs/`):
 
 ```bash
 # Pick a slug
