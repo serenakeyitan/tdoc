@@ -322,6 +322,72 @@
   /* Reserve a tiny bottom padding on the body so the footer never sits flush
      against the viewport edge when the doc is short. */
   body { padding-bottom: 24px; }
+
+  /* ============ DARK MODE ============
+     The top bar is already dark. Treat everything else: cards, popup, modal,
+     drawer, emoji picker, reactions, footer. FAB stays blue. */
+  @media (prefers-color-scheme: dark) {
+    .tdoc-margin-comment { background: #161616; border-color: #2a2a2a;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+    .tdoc-margin-comment.active { box-shadow: 0 4px 16px rgba(22,82,240,0.35); border-color: #1652f0; }
+    .tdoc-margin-comment.tdoc-unanchored::before { color: #777; }
+    .tdoc-margin-comment .author .login { color: #e5e5e5; }
+    .tdoc-margin-comment .author .anon { color: #888; }
+    .tdoc-margin-comment .text { color: #e5e5e5; }
+    .tdoc-margin-comment .meta { color: #888; }
+    .tdoc-margin-comment .del { color: #ff6b6b; }
+    .tdoc-margin-comment .copy-md { color: #888; }
+    .tdoc-margin-comment .copy-md:hover { color: #4a8cff; }
+    .tdoc-margin-comment .tdoc-reply-toggle { color: #4a8cff; }
+
+    .tdoc-react-chip { background: #1f1f1f; border-color: #2e2e2e; color: #d0d0d0; }
+    .tdoc-react-chip:hover { background: #262626; }
+    .tdoc-react-chip.mine { background: rgba(22,82,240,0.18); border-color: #1652f0; color: #8ab0ff; }
+    .tdoc-react-add { color: #777; }
+    .tdoc-react-add:hover { color: #4a8cff; }
+
+    .tdoc-emoji-picker { background: #161616; border-color: #2a2a2a;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+    .tdoc-emoji-picker button:hover { background: #262626; }
+    .tdoc-emoji-picker button.tdoc-emoji-text { color: #4a8cff; }
+    .tdoc-emoji-picker button.tdoc-emoji-text:hover { background: rgba(22,82,240,0.18); }
+
+    .tdoc-replies-toggle { color: #4a8cff; border-top-color: #2a2a2a; }
+    .tdoc-reply { border-left-color: #2a2a2a; }
+    .tdoc-reply .author .login { color: #e5e5e5; }
+    .tdoc-reply .author .anon { color: #888; }
+    .tdoc-reply .text { color: #d0d0d0; }
+    .tdoc-reply .meta { color: #888; }
+    .tdoc-reply .del { color: #ff6b6b; }
+    .tdoc-reply-form { border-top-color: #2a2a2a; }
+    .tdoc-reply-form textarea { background: #0f0f0f; color: #e5e5e5; border-color: #2a2a2a; }
+    .tdoc-reply-form textarea:focus { border-color: #1652f0; }
+
+    .tdoc-modal { background: #161616; color: #e5e5e5;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+    .tdoc-modal p { color: #b8b8b8; }
+    .tdoc-modal .step { color: #b8b8b8; }
+    .tdoc-modal button { background: #1f1f1f; border-color: #2a2a2a; color: #e5e5e5; }
+    .tdoc-modal button.primary { background: #1652f0; border-color: #1652f0; color: #fff; }
+    .tdoc-modal .status { color: #888; }
+
+    body.tdoc-narrow #tdoc-comment-layer { background: #0f0f0f; border-top-color: #2a2a2a;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.6); }
+    body.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { background: #444; }
+
+    /* Anchor highlight: a darker yellow still distinguishable from prose. */
+    .tdoc-anchor-mark { background: #5e4f00; color: inherit; }
+    .tdoc-anchor-mark:hover { background: #7a6700; }
+    .tdoc-anchor-mark.active,
+    .tdoc-anchor-mark .tdoc-anchor-mark.active { background: #8a7400; box-shadow: 0 -1.5px 0 0 #b89c00 inset; }
+    .tdoc-pending-highlight { background: #8a7400; box-shadow: 0 0 0 1px #b89c00 inset; }
+
+    /* Footer: low-opacity light text. */
+    .tdoc-footer { color: #777; border-top-color: #2a2a2a; }
+    .tdoc-footer a { color: #999; }
+    .tdoc-footer a:hover { color: #8ab0ff; }
+    .tdoc-footer .sep { color: #3a3a3a; }
+  }
   `;
   const style = document.createElement('style');
   style.textContent = css;
