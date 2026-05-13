@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# tdoc-update — pull latest from origin/main and report what changed.
+#
+# - Detects whether the skill dir is a git checkout. If not, prints a clear
+#   instruction to clone it instead of `git pull`.
+# - Fetches origin/main, shows the changelog since HEAD.
+# - Fast-forwards if possible. If local changes exist, stashes them, pulls,
+#   then pops the stash (warns if conflict).
+# - If the user has already published (~/.tdoc/published.json exists), offers
+#   to redeploy by running tdoc-publish on the latest doc.
+#
+# Usage:
+#   tdoc-update            # interactive (asks before redeploy)
+#   tdoc-update --yes      # non-interactive (auto-redeploy if published)
+#   tdoc-update --check    # report-only: print what WOULD change, no changes
+
+set -uo pipefail
+
+SKILL_DIR="${SKILL_DIR:-$HOME/.claude/skills/tdoc}"
+cd "$SKILL_DIR" || { echo "tdoc-update: cannot cd into $SKILL_DIR" >&2; exit 1; }
+
+YES=0
+CHECK=0
+for arg in "$@"; do
+  case "$arg" in
+    --yes|-y) YES=1 ;;
+    --check) CHECK=1 ;;
+    -h|--help) echo "usage: tdoc-update [--yes] [--check]"; exit 0 ;;
+  esac
+done
+
+if [ ! -d .git ]; then
+  echo "[tdoc-update] this skill dir is not a git checkout."
+  echo "             to install the latest, clone it instead:"
+  echo "               rm -rf $SKILL_DIR && git clone https://github.com/serenakeyitan/tdoc $SKILL_DIR"
+  exit 1
+fi
+
+echo "[tdoc-update] fetching origin/main..."
+if ! git fetch origin main --quiet; then
+  echo "[tdoc-update] fetch failed (check network / GitHub access)." >&2
+  exit 1
+fi
+
+LOCAL="$(git rev-parse HEAD)"
+REMOTE="$(git rev-parse origin/main)"
+BASE="$(git merge-base HEAD origin/main)"
+
+if [ "$LOCAL" = "$REMOTE" ]; then
+  echo "[tdoc-update] already up-to-date (no remote changes)."
+  exit 0
+fi
+
+if [ "$LOCAL" != "$BASE" ]; then
+  echo "[tdoc-update] local branch has diverged from origin/main."
+  echo "             commit or stash local work, or re-clone from scratch."
+  exit 1
+fi
+
+# Show the incoming changelog
+echo
+echo "[tdoc-update] incoming changes:"
+git --no-pager log --oneline "$LOCAL..$REMOTE" | sed 's/^/  /'
+echo
+
+if [ "$CHECK" = "1" ]; then
+  echo "[tdoc-update] --check: not applying. ${#} commit(s) ahead."
+  exit 0
+fi
+
+# Stash local edits, if any
+STASH_REF=""
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "[tdoc-update] local edits detected — stashing..."
+  git stash push -u -m "tdoc-update auto-stash $(date -Iseconds)" >/dev/null
+  STASH_REF="$(git stash list | head -1 | awk -F: '{print $1}')"
+fi
+
+# Pull (fast-forward)
+echo "[tdoc-update] fast-forwarding..."
+if ! git merge --ff-only origin/main --quiet; then
+  echo "[tdoc-update] fast-forward failed. Aborting."
+  [ -n "$STASH_REF" ] && git stash pop "$STASH_REF" >/dev/null
+  exit 1
+fi
+echo "[tdoc-update] updated to: $(git rev-parse --short HEAD)"
+
+# Restore stash
+if [ -n "$STASH_REF" ]; then
+  echo "[tdoc-update] restoring stashed local edits..."
+  if ! git stash pop "$STASH_REF" >/dev/null 2>&1; then
+    echo "[tdoc-update] ⚠ stash pop had conflicts. Resolve with: git stash list / git stash apply"
+  fi
+fi
+
+# Offer to redeploy
+CONFIG_FILE="$HOME/.tdoc/published.json"
+if [ -f "$CONFIG_FILE" ]; then
+  PUBLISHED_SLUG=""
+  if command -v jq >/dev/null 2>&1; then
+    # Find any locally-existing doc to re-publish — use the one with most-recent meta.json
+    NEWEST_DOC="$(find "$HOME/tdocs" -mindepth 2 -maxdepth 2 -name meta.json -print0 2>/dev/null \
+      | xargs -0 ls -t 2>/dev/null | head -1 || true)"
+    [ -n "$NEWEST_DOC" ] && PUBLISHED_SLUG="$(basename "$(dirname "$NEWEST_DOC")")"
+  fi
+  echo
+  if [ "$YES" = "1" ]; then
+    echo "[tdoc-update] --yes: redeploying worker (and uploading $PUBLISHED_SLUG)..."
+    "$SKILL_DIR/bin/tdoc-publish" "${PUBLISHED_SLUG:-}" || true
+  else
+    echo "[tdoc-update] you have a published worker. To pick up code changes, redeploy with:"
+    echo "    $SKILL_DIR/bin/tdoc-publish ${PUBLISHED_SLUG:-<slug>}"
+    echo "             (or run: tdoc-update --yes  to do it automatically)"
+  fi
+fi

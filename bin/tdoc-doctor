@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# tdoc-doctor — non-destructive health probe.
+#
+# Prints JSON to stdout describing the current state of every dependency and
+# every Cloudflare resource tdoc needs to publish. Reads from `wrangler` CLI
+# and the Cloudflare API. NEVER creates or deletes anything.
+#
+# Mocking (for tests): set any of these env vars to override probes:
+#   TDOC_MOCK_NO_NODE=1
+#   TDOC_MOCK_NO_WRANGLER=1
+#   TDOC_MOCK_NO_JQ=1
+#   TDOC_MOCK_NO_GH=1
+#   TDOC_MOCK_NO_CF_LOGIN=1         # wrangler not logged in
+#   TDOC_MOCK_NO_SUBDOMAIN=1        # workers.dev subdomain not claimed
+#   TDOC_MOCK_NO_R2=1               # R2 not enabled
+#   TDOC_MOCK_NOT_PUBLISHED=1       # no ~/.tdoc/published.json
+#
+# Exit code is always 0; consumers read the JSON.
+
+set -uo pipefail
+
+SKILL_DIR="${SKILL_DIR:-$HOME/.claude/skills/tdoc}"
+CONFIG_FILE="${TDOC_CONFIG_FILE:-$HOME/.tdoc/published.json}"
+
+# --- helpers ---
+have() {
+  [ -n "${!1:-}" ] && return 1   # mock override "no_X" present → not have
+  command -v "$2" >/dev/null 2>&1
+}
+
+# Use jq if available to assemble JSON properly; fall back to manual emission.
+HAS_JQ=0
+[ -z "${TDOC_MOCK_NO_JQ:-}" ] && command -v jq >/dev/null 2>&1 && HAS_JQ=1
+
+# --- deps ---
+node_ok=false; node_ver=""
+if [ -z "${TDOC_MOCK_NO_NODE:-}" ] && command -v node >/dev/null 2>&1; then
+  node_ver="$(node --version 2>/dev/null || true)"
+  # Need 18+
+  major="$(echo "$node_ver" | sed -E 's/^v?([0-9]+).*/\1/')"
+  if [ "${major:-0}" -ge 18 ] 2>/dev/null; then node_ok=true; fi
+fi
+
+wrangler_ok=false; wrangler_ver=""
+if [ -z "${TDOC_MOCK_NO_WRANGLER:-}" ] && command -v wrangler >/dev/null 2>&1; then
+  wrangler_ver="$(wrangler --version 2>/dev/null | head -1 || true)"
+  wrangler_ok=true
+fi
+
+jq_ok=false
+[ -z "${TDOC_MOCK_NO_JQ:-}" ] && command -v jq >/dev/null 2>&1 && jq_ok=true
+
+gh_ok=false
+[ -z "${TDOC_MOCK_NO_GH:-}" ] && command -v gh >/dev/null 2>&1 && gh_ok=true
+
+# --- Cloudflare state ---
+# Only probe if wrangler is present and not mocked away.
+cf_logged_in=false
+cf_account_id=""
+cf_subdomain=""
+cf_subdomain_ok=false
+cf_r2_enabled=false
+cf_publish_token=""
+
+if $wrangler_ok && [ -z "${TDOC_MOCK_NO_CF_LOGIN:-}" ]; then
+  if wrangler whoami >/dev/null 2>&1; then
+    cf_logged_in=true
+    cf_account_id="$(wrangler whoami 2>/dev/null | grep -Eo '[a-f0-9]{32}' | head -1 || true)"
+    oauth_token="$(grep -E '^oauth_token' "$HOME/.wrangler/config/default.toml" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+    if [ -n "$cf_account_id" ] && [ -n "$oauth_token" ]; then
+      # Probe subdomain
+      if [ -z "${TDOC_MOCK_NO_SUBDOMAIN:-}" ]; then
+        sub_resp="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$cf_account_id/workers/subdomain" \
+          -H "Authorization: Bearer $oauth_token" 2>/dev/null || true)"
+        if [ -n "$sub_resp" ] && $jq_ok; then
+          cf_subdomain="$(echo "$sub_resp" | jq -r '.result.subdomain // empty' 2>/dev/null || true)"
+        fi
+        [ -n "$cf_subdomain" ] && [ "$cf_subdomain" != "null" ] && cf_subdomain_ok=true
+      fi
+      # Probe R2 (list buckets — fails with 10042 if disabled)
+      if [ -z "${TDOC_MOCK_NO_R2:-}" ]; then
+        r2_resp="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$cf_account_id/r2/buckets" \
+          -H "Authorization: Bearer $oauth_token" 2>/dev/null || true)"
+        if [ -n "$r2_resp" ] && $jq_ok; then
+          err_code="$(echo "$r2_resp" | jq -r '.errors[0].code // empty' 2>/dev/null || true)"
+          if [ -z "$err_code" ] || [ "$err_code" = "null" ]; then cf_r2_enabled=true; fi
+        fi
+      fi
+    fi
+  fi
+fi
+
+# --- already-published config? ---
+published=false
+publish_subdomain=""
+publish_worker=""
+if [ -z "${TDOC_MOCK_NOT_PUBLISHED:-}" ] && [ -f "$CONFIG_FILE" ]; then
+  published=true
+  if $jq_ok; then
+    publish_subdomain="$(jq -r '.subdomain // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+    publish_worker="$(jq -r '.worker // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+  fi
+fi
+
+# --- ready_to_publish derived flag ---
+ready_to_publish=false
+if $node_ok && $wrangler_ok && $jq_ok && $cf_logged_in && $cf_subdomain_ok && $cf_r2_enabled; then
+  ready_to_publish=true
+fi
+
+# --- missing_steps: ordered checklist of what the user still needs to do ---
+# Each entry has: id, label, action_kind ("install"|"login"|"click"|"automatic"), command_or_url
+missing_json="[]"
+if $jq_ok; then
+  jq_args=()
+  add() { jq_args+=(--argjson m "$(jq -n --arg id "$1" --arg label "$2" --arg kind "$3" --arg cmd "$4" '{id:$id,label:$label,kind:$kind,cmd:$cmd}')" '. + [$m]'); }
+  cmds="."
+  add_step() {
+    cmds="$cmds | . + [{id:\"$1\",label:\"$2\",kind:\"$3\",cmd:\"$4\"}]"
+  }
+  cmds="."
+  $node_ok || cmds="$cmds | . + [{id:\"node\",label:\"Install Node 18+\",kind:\"install\",cmd:\"brew install node\"}]"
+  $wrangler_ok || cmds="$cmds | . + [{id:\"wrangler\",label:\"Install wrangler CLI\",kind:\"install\",cmd:\"npm i -g wrangler\"}]"
+  $jq_ok || cmds="$cmds | . + [{id:\"jq\",label:\"Install jq\",kind:\"install\",cmd:\"brew install jq\"}]"
+  if ! $cf_logged_in; then
+    cmds="$cmds | . + [{id:\"cf_login\",label:\"Log into Cloudflare\",kind:\"login\",cmd:\"wrangler login\"}]"
+  else
+    if ! $cf_subdomain_ok; then
+      cmds="$cmds | . + [{id:\"cf_subdomain\",label:\"Claim your free workers.dev subdomain\",kind:\"click\",cmd:\"https://dash.cloudflare.com/$cf_account_id/workers/onboarding\"}]"
+    fi
+    if ! $cf_r2_enabled; then
+      cmds="$cmds | . + [{id:\"cf_r2\",label:\"Enable R2 on your Cloudflare account (one click, free up to 10GB)\",kind:\"click\",cmd:\"https://dash.cloudflare.com/$cf_account_id/r2\"}]"
+    fi
+  fi
+  missing_json="$(echo '[]' | jq "$cmds")"
+fi
+
+# --- emit JSON ---
+if $jq_ok; then
+  jq -n \
+    --argjson node_ok "$node_ok" \
+    --arg node_ver "$node_ver" \
+    --argjson wrangler_ok "$wrangler_ok" \
+    --arg wrangler_ver "$wrangler_ver" \
+    --argjson jq_ok "$jq_ok" \
+    --argjson gh_ok "$gh_ok" \
+    --argjson cf_logged_in "$cf_logged_in" \
+    --arg cf_account_id "$cf_account_id" \
+    --argjson cf_subdomain_ok "$cf_subdomain_ok" \
+    --arg cf_subdomain "$cf_subdomain" \
+    --argjson cf_r2_enabled "$cf_r2_enabled" \
+    --argjson published "$published" \
+    --arg publish_subdomain "$publish_subdomain" \
+    --arg publish_worker "$publish_worker" \
+    --argjson ready_to_publish "$ready_to_publish" \
+    --argjson missing_steps "$missing_json" \
+    '{
+      deps: { node: { ok: $node_ok, version: $node_ver },
+              wrangler: { ok: $wrangler_ok, version: $wrangler_ver },
+              jq: { ok: $jq_ok },
+              gh: { ok: $gh_ok } },
+      cloudflare: { logged_in: $cf_logged_in, account_id: $cf_account_id,
+                    subdomain: { ok: $cf_subdomain_ok, name: $cf_subdomain },
+                    r2_enabled: $cf_r2_enabled },
+      published: { ok: $published, subdomain: $publish_subdomain, worker: $publish_worker },
+      ready_to_publish: $ready_to_publish,
+      missing_steps: $missing_steps
+    }'
+else
+  # Minimal JSON fallback if jq isn't installed (we still report the lack of jq).
+  cat <<EOF
+{"deps":{"node":{"ok":$node_ok,"version":"$node_ver"},"wrangler":{"ok":$wrangler_ok,"version":"$wrangler_ver"},"jq":{"ok":false},"gh":{"ok":$gh_ok}},"cloudflare":{"logged_in":false,"account_id":""},"published":{"ok":false},"ready_to_publish":false,"missing_steps":[{"id":"jq","label":"Install jq","kind":"install","cmd":"brew install jq"}]}
+EOF
+fi
