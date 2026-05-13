@@ -1172,13 +1172,13 @@
     };
   }
   async function pollDevice(device_code) {
+    const status = document.getElementById('tdoc-poll-status');
     try {
       const r = await fetch('/api/auth/device/poll', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_code })
       });
       const data = await r.json();
-      const status = document.getElementById('tdoc-poll-status');
       if (data.ok && data.identity) {
         identity = data.identity;
         closeDeviceModal();
@@ -1186,12 +1186,22 @@
         refreshComments();
         return;
       }
-      if (data.error === 'authorization_pending' || data.error === 'slow_down') return;
+      // Surface any unexpected error so the user isn't stuck on "Waiting…" forever.
+      // GitHub's documented pending states keep polling silently.
+      if (data.error === 'authorization_pending' || data.error === 'slow_down' || (data.pending && !data.error)) return;
       if (data.error === 'expired_token' || data.error === 'access_denied') {
         if (status) status.textContent = 'Code expired or denied. Try again.';
-        if (pollTimer) clearInterval(pollTimer);
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        return;
       }
-    } catch { /* keep polling */ }
+      // Any other error (no_user, github_unreachable, 500) — show it and stop polling.
+      if (data.error || !r.ok) {
+        if (status) status.textContent = 'Sign-in failed: ' + (data.message || data.error || `HTTP ${r.status}`) + '. Try again.';
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      }
+    } catch (e) {
+      if (status) status.textContent = 'Network error: ' + e.message + ' — retrying…';
+    }
   }
 
   // ========== Popup (new-comment): text + element anchors ==========

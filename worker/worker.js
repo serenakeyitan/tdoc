@@ -328,10 +328,17 @@ export default {
           device_code: body.device_code,
           grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
         });
-        if (r.error) return json({ pending: true, error: r.error });
+        // GitHub returns errors *with* a 200 status. Pending states must keep
+        // polling; everything else is a real failure surfaced to the user.
+        if (r.error === 'authorization_pending' || r.error === 'slow_down') {
+          return json({ pending: true, error: r.error });
+        }
+        if (r.error) {
+          return json({ error: r.error, message: r.error_description || r.error }, { status: 400 });
+        }
         if (!r.access_token) return json({ pending: true });
         const user = await ghUser(r.access_token);
-        if (!user.login) return json({ error: 'no_user' }, { status: 500 });
+        if (!user.login) return json({ error: 'no_user', message: user.message || 'GitHub /user returned no login' }, { status: 500 });
         const sid = rand(24);
         const session = {
           token: r.access_token,
