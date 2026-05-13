@@ -159,6 +159,56 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
       if (!present) throw new Error('identity slot empty');
     });
 
+    await t('Footer visible and fits viewport', async () => {
+      const m = await page.evaluate(() => {
+        const f = document.querySelector('.tdoc-footer');
+        if (!f) return null;
+        const r = f.getBoundingClientRect();
+        return { visible: f.offsetWidth > 0 && f.offsetHeight > 0, right: r.right, ww: window.innerWidth };
+      });
+      if (!m) throw new Error('footer missing');
+      if (!m.visible) throw new Error('footer not visible');
+      if (m.right > m.ww + 1) throw new Error(`footer right=${m.right} > viewport ${m.ww}`);
+    });
+
+    await t('Footer repo + bdocs links present', async () => {
+      const hrefs = await page.evaluate(() => [...document.querySelectorAll('.tdoc-footer a')].map(a => a.href));
+      if (!hrefs.some(h => h.includes('serenakeyitan/tdoc'))) throw new Error('repo link missing');
+      if (!hrefs.some(h => h.includes('jessepollak'))) throw new Error('bdocs credit link missing');
+    });
+
+    await t('Copy button opens dropdown', async () => {
+      // Programmatic click avoids mobile coord issues.
+      await page.evaluate(() => document.querySelector('#tdoc-copy-md-btn').click());
+      await page.waitForTimeout(120);
+      const open = await page.evaluate(() => document.querySelector('#tdoc-copy-md-menu.open') !== null);
+      // Close
+      await page.evaluate(() => document.querySelector('#tdoc-copy-md-menu').classList.remove('open'));
+      if (!open) throw new Error('copy dropdown did not open');
+    });
+
+    if (v.expectMore) {
+      await t('More menu opens via programmatic click', async () => {
+        await page.evaluate(() => document.querySelector('#tdoc-more-btn').click());
+        await page.waitForTimeout(120);
+        const open = await page.evaluate(() => document.querySelector('#tdoc-secondary-menu.open') !== null);
+        await page.evaluate(() => document.querySelector('#tdoc-secondary-menu').classList.remove('open'));
+        if (!open) throw new Error('More menu did not open via click()');
+      });
+    } else {
+      await t('Fork + All-docs buttons clickable', async () => {
+        const ok = await page.evaluate(() => {
+          const fork = document.querySelector('#tdoc-fork-btn');
+          const home = document.querySelector('#tdoc-home-btn');
+          return !!(fork && home &&
+            typeof fork.onclick === 'function' &&
+            typeof home.onclick === 'function' &&
+            fork.offsetWidth > 0 && home.offsetWidth > 0);
+        });
+        if (!ok) throw new Error('Fork/All-docs not wired or not visible');
+      });
+    }
+
     await ctx.close();
     console.log();
   }
