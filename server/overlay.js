@@ -801,24 +801,9 @@
       .map(c => ({ c, mark: state.anchorMarks.get(c.id), card: state.cardEls.get(c.id) }))
       .filter(x => x.mark && x.card && (x.mark.ranges?.[0] || x.mark.el))
       .map(x => {
-        // Text anchors are line-height tall — align to top.
-        // Element anchors (img/canvas/video) are big blocks — anchor to the
-        // VERTICAL CENTER of the element minus half the card height. This
-        // matches user mental model: the card sits beside the *thing* it
-        // comments on, not floating above it.
         let top;
-        if (x.mark.ranges?.[0]) {
-          top = x.mark.ranges[0].getBoundingClientRect().top;
-        } else if (x.mark.kind === 'element' || x.mark.targetEl) {
-          const targetRect = (x.mark.targetEl || x.mark.el).getBoundingClientRect();
-          const cardH = x.card.offsetHeight || 100;
-          // Center the card vertically against the element. Clamp to the
-          // element's top in case the element is shorter than the card.
-          const centerY = targetRect.top + targetRect.height / 2 - cardH / 2;
-          top = Math.max(targetRect.top, centerY);
-        } else {
-          top = x.mark.el.getBoundingClientRect().top;
-        }
+        if (x.mark.ranges?.[0]) top = x.mark.ranges[0].getBoundingClientRect().top;
+        else top = x.mark.el.getBoundingClientRect().top;
         return { ...x, top: top + window.scrollY };
       })
       .sort((a, b) => a.top - b.top);
@@ -1308,33 +1293,12 @@
     commentPill.type = 'button';
     commentPill.setAttribute('aria-label', 'Comment on this');
     commentPill.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment`;
-    // Position the pill OUTSIDE the artifact so it can't cover any content.
-    // Preference order: right of the artifact (if room), then above, then below,
-    // then inside the top-right corner as a last resort.
-    const pillW = 110;        // approx; refined after layout
-    const pillH = 30;
-    const gap = 8;
-    const vpW = window.innerWidth, vpH = window.innerHeight;
-    let top, left;
-    if (r.right + gap + pillW <= vpW - 8) {
-      // Right of the artifact, vertically aligned with its top
-      top = window.scrollY + r.top;
-      left = window.scrollX + r.right + gap;
-    } else if (r.top - gap - pillH >= 8) {
-      // Above the artifact, right-aligned
-      top = window.scrollY + r.top - pillH - gap;
-      left = window.scrollX + Math.max(8, r.right - pillW);
-    } else if (r.bottom + gap + pillH <= vpH + window.scrollY) {
-      // Below the artifact, right-aligned
-      top = window.scrollY + r.bottom + gap;
-      left = window.scrollX + Math.max(8, r.right - pillW);
-    } else {
-      // Fallback: inside top-right (cramped layouts)
-      top = window.scrollY + r.top + 8;
-      left = window.scrollX + Math.max(r.left + 8, r.right - pillW - 8);
-    }
-    commentPill.style.top = top + 'px';
-    commentPill.style.left = left + 'px';
+    // Position the pill INSIDE the artifact's top-right corner. Always anchored
+    // to the artifact body so it visually belongs to it. (Kept inside on user
+    // request after trying the outside-only variant.)
+    const pillW = 110;
+    commentPill.style.top = (window.scrollY + r.top + 8) + 'px';
+    commentPill.style.left = (window.scrollX + Math.max(r.left + 8, r.right - pillW - 8)) + 'px';
     commentPill.onclick = (e) => {
       e.stopPropagation();
       e.preventDefault();
