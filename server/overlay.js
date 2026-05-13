@@ -227,6 +227,11 @@
   .tdoc-modal button.primary { background: #1652f0; border-color: #1652f0; color: #fff; }
   .tdoc-modal button.primary:hover { background: #1245d0; }
   .tdoc-modal .status { color: #888; font-size: 13px; }
+  /* Modal helper classes used by Publish/Share so dark-mode can override. */
+  .tdoc-modal .muted { color: #666; font-size: 13px; }
+  .tdoc-modal .divider { border-top: 1px solid #eee; padding-top: 12px; margin-top: 12px; }
+  .tdoc-modal .danger { color: #c33; font-size: 13px; }
+  .tdoc-modal code { background: #f5f6f8; padding: 1px 5px; border-radius: 3px; }
 
   /* Narrow mode (drawer + FAB) */
   body.tdoc-narrow .tdoc-bar .slug, body.tdoc-narrow .tdoc-bar #tdoc-fork-btn, body.tdoc-narrow .tdoc-bar #tdoc-home-btn, body.tdoc-narrow .tdoc-bar #tdoc-publish-btn, body.tdoc-narrow .tdoc-bar #tdoc-share-btn, body.tdoc-narrow .tdoc-bar #tdoc-saveas-btn { display: none; }
@@ -309,7 +314,13 @@
     .tdoc-modal p, .tdoc-modal .step { color: #b8b8b8; }
     .tdoc-modal button { background: #1f1f1f; border-color: #2a2a2a; color: #e5e5e5; }
     .tdoc-modal button.primary { background: #1652f0; border-color: #1652f0; color: #fff; }
+    .tdoc-modal button.primary:hover { background: #1245d0; }
     .tdoc-modal .status { color: #888; }
+    /* Publish/Share modal helpers in dark mode */
+    .tdoc-modal .muted { color: #999; }
+    .tdoc-modal .divider { border-top-color: #2a2a2a; }
+    .tdoc-modal .danger { color: #ff7a7a; }
+    .tdoc-modal code { background: #0f0f0f; color: #e5e5e5; }
     body.tdoc-narrow #tdoc-comment-layer { background: #0f0f0f; border-top-color: #2a2a2a; box-shadow: 0 -4px 24px rgba(0,0,0,0.6); }
     body.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { background: #444; }
   }
@@ -1179,10 +1190,10 @@
           <button class="primary" id="tdoc-share-copy">Copy link</button>
           <button id="tdoc-share-open">Open in new tab</button>
         </div>
-        <p style="font-size:13px;color:#666;">Anyone with this link can read. To comment, they sign in with GitHub.</p>
-        <div style="border-top:1px solid #eee;padding-top:12px;margin-top:12px;">
-          <p style="margin:0 0 6px;color:#c33;font-size:13px;"><b>Unpublish</b></p>
-          <p style="margin:0 0 6px;font-size:12px;color:#666;">Unpublish requires the upload token, which only lives on your laptop. Run this locally:</p>
+        <p class="muted">Anyone with this link can read. To comment, they sign in with GitHub.</p>
+        <div class="divider">
+          <p class="danger" style="margin:0 0 6px;"><b>Unpublish</b></p>
+          <p class="muted" style="margin:0 0 6px;font-size:12px;">Unpublish requires the upload token, which only lives on your laptop. Run this locally:</p>
           <div class="code" style="font-size:13px;letter-spacing:0;text-align:left;cursor:copy;" id="tdoc-share-unpub">/tdoc unpublish ${escapeHtml(slug)}</div>
         </div>
         <div class="actions"><button id="tdoc-share-close">Close</button></div>
