@@ -1,39 +1,64 @@
 # tdoc
 
+> **Inspired by [bdocs](https://x.com/jessepollak/status/2054313757543964857) by [Jesse Pollak](https://x.com/jessepollak).** All credit to Jesse for the original idea, the "HTML is a powerful interface" framing, and the bdocs internal tool at Coinbase that showed what prompt-native docs can be. `tdoc` is an open-source community implementation of that vision — you should follow [@jessepollak](https://x.com/jessepollak) for the real thinking behind this.
+
 Prompt-native interactive HTML documents. Generate self-contained HTML docs from a prompt, serve them locally with text- and artifact-anchored inline commenting, and publish to your own Cloudflare Worker for free always-on sharing.
 
 This is a [Claude Code](https://claude.com/claude-code) skill. After installing, you invoke it from inside Claude Code with `/tdoc <command>`.
 
-## Inspiration
+## Credit & Inspiration
 
-Inspired by [**bdocs**](https://x.com/jessepollak/status/2054313757543964857) by [Jesse Pollak](https://x.com/jessepollak) — Coinbase's internal tool for prompt-native docs that demonstrated how HTML can be a "powerful interface" for AI-generated documents. `tdoc` is an **open-source, collaborative take** on that idea:
+The whole concept — *"what if a doc could think? what if HTML were the editing surface?"* — is **Jesse Pollak's**. Jesse described and demoed [bdocs](https://x.com/jessepollak/status/2054313757543964857), Coinbase's internal tool, on X. He framed it precisely:
+
+> "The best documents we have been producing lately are not Google Docs. They are standalone HTML pages: interactive models with sliders, decision frameworks with SVG diagrams, strategy docs that feel like products."
+
+> "There is no editor. The authoring interface is a prompt. The document is a build artifact, not something you manually maintain."
+
+Everything in `tdoc` follows from that framing. The differences are scope, not idea — Jesse's bdocs is the original; this is one possible open-source community implementation:
 
 - **Open** — MIT-licensed, anyone can clone and run it
 - **Collaborative** — each user publishes to *their own* Cloudflare Worker, gets a real shareable URL, and viewers sign in with GitHub to comment on text or artifacts (images, SVG, canvas, video). Threaded replies, emoji reactions.
 - **Always-on** — published docs live on Cloudflare's edge (free tier). No laptop needed.
 - **Live-updatable** — `/tdoc update` pulls the latest skill code; `--yes` redeploys your Worker so commenters get the new UI immediately.
 
+If Jesse ever open-sources the real bdocs, use that. This exists because the idea is too good to wait for.
+
 ## Why
 
 The best documents are often interactive HTML — live models with sliders, SVG decision frameworks, simulations that explain themselves. But there's no good home for them: GitHub Pages and local files are hard to share, comment on, or iterate.
 
-`tdoc` gives these docs a home. **Authoring is a prompt. The document is a build artifact, not something you maintain by hand.**
+`tdoc` gives these docs a home. **Authoring is a prompt. The document is a build artifact, not something you maintain by hand.** (That phrasing is Jesse's; we kept it because it's right.)
 
 ## Install
 
+**One-liner** (clones + opens onboarding for you):
+
 ```bash
-git clone https://github.com/serenakeyitan/tdoc ~/.claude/skills/tdoc
+git clone https://github.com/serenakeyitan/tdoc ~/.claude/skills/tdoc && echo "Now open Claude Code and run: /tdoc onboard"
 ```
 
-Then in Claude Code (or Codex) just say:
-
-```
-/tdoc onboard
-```
-
-The agent reads `bin/tdoc-doctor`, installs anything missing (Node 18+, wrangler, jq), guides you through Cloudflare setup (free), and offers to publish a sample doc. Smooth from zero to live URL in ~3 minutes.
+That's it. Open Claude Code (or Codex) and say `/tdoc onboard` — the agent reads `bin/tdoc-doctor`, installs anything missing (Node 18+, wrangler, jq), guides you through Cloudflare setup (free), and offers to publish a sample doc. Smooth from zero to live URL in ~3 minutes.
 
 For local-only use (no Cloudflare): just `/tdoc new <prompt>` works immediately, no setup.
+
+### Via the Claude Code plugin marketplace
+
+`tdoc` ships its own single-plugin marketplace, so you can install it as a proper Claude Code plugin without cloning manually:
+
+```
+/plugin marketplace add serenakeyitan/tdoc
+/plugin install tdoc@serenakeyitan-tdoc
+```
+
+This pulls the latest release, registers it as a managed plugin, and makes `/tdoc <command>` available without any `git clone`. Update with `/plugin update tdoc@serenakeyitan-tdoc` (or our own `/tdoc update`, which also redeploys your Worker).
+
+Once Anthropic accepts it into the official marketplace, the install will be just:
+
+```
+/plugin install tdoc@claude-plugins-official
+```
+
+Until then, the line above (`serenakeyitan/tdoc`) is the canonical install.
 
 ## Commands
 
