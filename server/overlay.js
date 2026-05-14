@@ -41,6 +41,29 @@
     document.head.appendChild(m);
   }
 
+  // ========== UI selector registry ==========
+  // One source of truth for "is this part of the tdoc overlay UI?".
+  //   UI_CONTAINERS — top-level overlay regions: bar, popups, comment column,
+  //                   margin cards, modals, footer. Use these when finding the
+  //                   doc's article element or stripping the overlay from a
+  //                   clone for export.
+  //   UI_ALL        — UI_CONTAINERS plus per-element decorations (anchor marks,
+  //                   outlines, hover affordances, menus). Use this for event
+  //                   delegation guards ("did the user click *our* chrome?").
+  const UI_CONTAINERS = '.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, #tdoc-comment-layer, .tdoc-footer';
+  const UI_ALL = UI_CONTAINERS + ', .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-hover-outline, .tdoc-comment-pill, .tdoc-emoji-picker, .tdoc-secondary-menu';
+
+  // ========== Geometry helpers ==========
+  // Position `box` as an absolutely-positioned overlay around `el`, inflated
+  // by `inset` pixels on each side (default 3 → a 3px-wide outline ring).
+  function positionOutlineAround(box, el, inset = 3) {
+    const r = el.getBoundingClientRect();
+    box.style.top = (window.scrollY + r.top - inset) + 'px';
+    box.style.left = (window.scrollX + r.left - inset) + 'px';
+    box.style.width = (r.width + inset * 2) + 'px';
+    box.style.height = (r.height + inset * 2) + 'px';
+  }
+
   // ========== Styles ==========
   // Each logical group is one comment block; rules within a group are tightly
   // packed. The narrow visual mode lives at the bottom and overrides base.
@@ -48,8 +71,19 @@
   /* Layout */
   body { padding-top: 44px !important; padding-bottom: 24px; -webkit-user-select: none; user-select: none; }
   body p,body h1,body h2,body h3,body h4,body h5,body h6,body li,body blockquote,body pre,body code,body figcaption,body th,body td,body dt,body dd,body summary,body span,body em,body strong,body i,body b,body u,body s,body a,body small,body sub,body sup,body mark,body textarea,body input[type="text"],body input[type="search"],body [contenteditable] { -webkit-user-select: text; user-select: text; }
-  body.tdoc-has-comments:not(.tdoc-narrow) { padding-right: 320px !important; }
+  /* Reserve the 320px comment column on the right. The article centers
+     itself inside the remaining (viewport - 320px) space via margin auto
+     (applied below in :where()). Adding a left padding keeps it from
+     hugging the screen edge on wide windows. */
+  body.tdoc-has-comments:not(.tdoc-narrow) { padding-right: 320px !important; padding-left: 80px !important; }
   body.tdoc-narrow { padding-right: 0 !important; }
+  /* Center the article container in the reading column. :where() so any
+     doc-defined margin wins. Applies only on wide layouts; narrow mode
+     uses the full body width via the drawer. */
+  body:not(.tdoc-narrow) :where(body > .wrap, body > main, body > article, body > .content, body > .container) {
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
   /* The body right-padding reserves space for the comment column. The
      article centers itself naturally inside the remaining (viewport minus
      320px) space via its own margin auto. As the window shrinks, the symmetric
@@ -555,7 +589,7 @@
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
         if (!n.parentElement) return NodeFilter.FILTER_REJECT;
-        if (n.parentElement.closest('.tdoc-bar, .tdoc-popup, .tdoc-modal-bg, #tdoc-comment-layer, .tdoc-footer')) return NodeFilter.FILTER_REJECT;
+        if (n.parentElement.closest(UI_CONTAINERS)) return NodeFilter.FILTER_REJECT;
         // Skip script/style/template etc — their .textContent is irrelevant.
         const tag = n.parentElement.tagName;
         if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEMPLATE' || tag === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
@@ -842,7 +876,7 @@
   // Single source of truth for "where does the article column live?".
   // Returns viewport-coord metrics for the widest non-UI container element.
   // Caller can add window.scrollX to `right`/`left` for page coords.
-  const ARTICLE_EXCLUDE = '.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, #tdoc-comment-layer, .tdoc-footer, .tdoc-modal-bg';
+  const ARTICLE_EXCLUDE = UI_CONTAINERS;
   function getArticleMetrics() {
     const candidates = document.querySelectorAll('main, article, .wrap, .content, .container');
     let best = null, bestRect = null, bestW = 0;
@@ -975,13 +1009,7 @@
     outline.className = 'tdoc-element-outline';
     outline.dataset.commentId = comment.id;
     document.body.appendChild(outline);
-    const repos = () => {
-      const r = el.getBoundingClientRect();
-      outline.style.top = (window.scrollY + r.top - 3) + 'px';
-      outline.style.left = (window.scrollX + r.left - 3) + 'px';
-      outline.style.width = (r.width + 6) + 'px';
-      outline.style.height = (r.height + 6) + 'px';
-    };
+    const repos = () => positionOutlineAround(outline, el);
     repos();
     outline._reposition = repos;
     outline._targetEl = el;
@@ -989,15 +1017,21 @@
     return { el: outline, targetEl: el };
   }
 
-  // ========== refreshComments ==========
-  async function refreshComments() {
-    // Clear all anchor state
+  // Tear down every per-comment artifact before a refresh: highlights, fallback
+  // spans, outlines (preserving the in-flight 'pending' one), margin cards, and
+  // both lookup maps. Anchored state must be reconstructed from the fresh list.
+  function resetAnchors() {
     clearAllCommentHighlights();
     unwrapFallbackSpans();
     document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(el => el.remove());
     for (const card of commentLayer.querySelectorAll('.tdoc-margin-comment')) card.remove();
     state.anchorMarks.clear();
     state.cardEls.clear();
+  }
+
+  // ========== refreshComments ==========
+  async function refreshComments() {
+    resetAnchors();
 
     let list = [];
     if (isFork) {
@@ -1263,13 +1297,9 @@
   }
   function setPendingElementOutline(el) {
     clearPendingElementOutline();
-    const r = el.getBoundingClientRect();
     pendingElementOutline = document.createElement('div');
     pendingElementOutline.className = 'tdoc-element-outline pending';
-    pendingElementOutline.style.top = (window.scrollY + r.top - 3) + 'px';
-    pendingElementOutline.style.left = (window.scrollX + r.left - 3) + 'px';
-    pendingElementOutline.style.width = (r.width + 6) + 'px';
-    pendingElementOutline.style.height = (r.height + 6) + 'px';
+    positionOutlineAround(pendingElementOutline, el);
     document.body.appendChild(pendingElementOutline);
   }
   function clearPendingElementOutline() {
@@ -1370,7 +1400,7 @@
   let dragState = null;
 
   function isInUI(el) {
-    return el && el.closest && el.closest('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-hover-outline, .tdoc-comment-pill, .tdoc-emoji-picker, .tdoc-secondary-menu, #tdoc-comment-layer, .tdoc-footer');
+    return el && el.closest && el.closest(UI_ALL);
   }
   function rectsOverlap(a, b) { return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom); }
   function findArtifactIntersecting(dragRect) {
@@ -1512,10 +1542,7 @@
     hoverOutlineEl = document.createElement('div');
     hoverOutlineEl.className = 'tdoc-hover-outline';
     hoverOutlineEl._target = el;
-    hoverOutlineEl.style.top = (window.scrollY + r.top - 3) + 'px';
-    hoverOutlineEl.style.left = (window.scrollX + r.left - 3) + 'px';
-    hoverOutlineEl.style.width = (r.width + 6) + 'px';
-    hoverOutlineEl.style.height = (r.height + 6) + 'px';
+    positionOutlineAround(hoverOutlineEl, el);
     document.body.appendChild(hoverOutlineEl);
 
     commentPill = document.createElement('button');
@@ -1754,7 +1781,7 @@
 
   window.__tdocCopyDocMd = async function (includeComments) {
     const clone = document.body.cloneNode(true);
-    clone.querySelectorAll('.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, .tdoc-element-outline, .tdoc-hover-outline, #tdoc-comment-layer, .tdoc-footer, script, style, noscript').forEach(n => n.remove());
+    clone.querySelectorAll(UI_ALL + ', script, style, noscript').forEach(n => n.remove());
     let md = htmlToMarkdown(clone);
     if (includeComments && state.activeComments.length) {
       md += '\n\n---\n\n## Comments\n\n' + state.activeComments.map(commentToMd).join('\n---\n\n');

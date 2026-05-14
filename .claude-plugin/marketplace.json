@@ -1,12 +1,12 @@
 {
   "name": "serenakeyitan-tdoc",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "description": "Single-plugin marketplace hosting tdoc.",
   "plugins": [
     {
       "name": "tdoc",
       "source": "github:serenakeyitan/tdoc",
-      "version": "0.1.29",
+      "version": "0.1.30",
       "description": "Prompt-native interactive HTML docs. Open-source community implementation of Jesse Pollak's bdocs idea.",
       "homepage": "https://github.com/serenakeyitan/tdoc"
     }

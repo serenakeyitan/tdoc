@@ -1,6 +1,6 @@
 {
   "name": "tdoc",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "description": "Prompt-native interactive HTML docs — open-source community implementation of Jesse Pollak's bdocs idea. Generate self-contained HTML from a prompt, comment on text + artifacts, publish to your own Cloudflare Worker for free always-on sharing.",
   "homepage": "https://github.com/serenakeyitan/tdoc",
   "license": "MIT",
