@@ -277,7 +277,19 @@ When the user reports a problem, check these first:
 
 ### Default styling — DO NOT re-style the doc
 
-The overlay injects a complete default template: typography (system font stack), heading sizes (h1=36px, h2=26px, h3=20px), body text (17px, line-height 1.65), lists, code blocks, blockquotes, tables, links, hr, figcaption — all consistent across every doc. **Don't write your own CSS for these unless the doc genuinely needs a different aesthetic** (a presentation, a landing page, etc.). Reading docs, essays, and reports should not override the template.
+The overlay injects a complete default template modeled after the `conway-life` doc ("What if a doc could think?"): tight, readable, system fonts only.
+
+- System font stack (`system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`)
+- Body: 17px / line-height 1.65 / `#111` on white
+- h1: 34px / line-height 1.15 / -0.01em letter-spacing
+- h2: 24px / 1.25 / 40px top margin
+- h3: 19px / 1.35 / 28px top margin
+- Paragraph: 18px bottom margin
+- Blockquote: 3px solid `#111` left rule, `#f5f6f8` background-ish quoted block (mono pre)
+- pre: mono 15px, light gray background, left-rule, scrolling overflow
+- Code (inline): 0.92em mono, light-gray rounded chip
+
+**Don't write your own CSS for these unless the doc genuinely needs a different aesthetic** (a presentation, a landing page, a doc with custom widgets). Reading docs, essays, and reports should not override the template.
 
 What to write:
 

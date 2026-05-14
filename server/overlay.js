@@ -94,33 +94,35 @@
      headings, lists, code, tables, quotes. Wrapped in :where() so a doc that
      truly needs a different aesthetic can override per element. Future
      templates would live alongside this block, switched by a body class. */
+  /* Default template, modeled after conway-life ("What if a doc could think?").
+     Tight, readable, system-fonts, no fluff. */
   :where(body) {
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-size: 17px;
     line-height: 1.65;
-    color: #1a1a1a;
+    color: #111;
     background: #fff;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
   }
-  :where(body h1) { font-size: 36px; line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 12px; color: #0a0a0a; }
-  :where(body h2) { font-size: 26px; line-height: 1.3; font-weight: 700; letter-spacing: -0.015em; margin: 40px 0 12px; color: #0a0a0a; }
-  :where(body h3) { font-size: 20px; line-height: 1.35; font-weight: 600; margin: 28px 0 8px; color: #0a0a0a; }
-  :where(body h4) { font-size: 17px; font-weight: 600; margin: 20px 0 6px; color: #0a0a0a; }
-  :where(body h5, body h6) { font-size: 15px; font-weight: 600; margin: 16px 0 4px; color: #0a0a0a; text-transform: uppercase; letter-spacing: 0.05em; }
-  :where(body p) { margin: 0 0 16px; }
+  :where(body h1) { font-size: 34px; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 24px; color: #111; }
+  :where(body h2) { font-size: 24px; line-height: 1.25; font-weight: 700; letter-spacing: -0.005em; margin: 40px 0 14px; color: #111; }
+  :where(body h3) { font-size: 19px; line-height: 1.35; font-weight: 600; margin: 28px 0 10px; color: #111; }
+  :where(body h4) { font-size: 17px; font-weight: 600; margin: 20px 0 6px; color: #111; }
+  :where(body h5, body h6) { font-size: 14px; font-weight: 600; margin: 16px 0 4px; color: #111; text-transform: uppercase; letter-spacing: 0.06em; }
+  :where(body p) { margin: 0 0 18px; }
   :where(body a) { color: #1652f0; text-decoration: underline; text-underline-offset: 2px; }
   :where(body a:hover) { text-decoration-thickness: 2px; }
-  :where(body ul, body ol) { margin: 0 0 16px; padding-left: 24px; }
+  :where(body ul, body ol) { margin: 0 0 18px; padding-left: 24px; }
   :where(body li) { margin: 4px 0; }
-  :where(body blockquote) { margin: 0 0 16px; padding: 4px 16px; border-left: 3px solid #d4d4d4; color: #555; }
-  :where(body code) { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.9em; background: #f4f4f5; padding: 1px 5px; border-radius: 4px; }
-  :where(body pre) { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; line-height: 1.55; background: #f8f8f9; padding: 14px 16px; border-radius: 8px; border: 1px solid #ececef; margin: 0 0 16px; overflow-x: auto; }
+  :where(body blockquote) { margin: 24px 0; padding: 4px 20px; border-left: 3px solid #111; color: #555; font: 15px/1.55 system-ui, sans-serif; }
+  :where(body code) { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; background: #f5f6f8; padding: 1px 5px; border-radius: 4px; }
+  :where(body pre) { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 15px; line-height: 1.55; background: #f5f6f8; border-left: 3px solid #111; padding: 16px 20px; margin: 24px 0; overflow-x: auto; }
   :where(body pre code) { background: transparent; padding: 0; border-radius: 0; }
-  :where(body hr) { border: 0; border-top: 1px solid #ececef; margin: 32px 0; }
-  :where(body table) { border-collapse: collapse; margin: 0 0 16px; font-size: 15px; }
-  :where(body th, body td) { padding: 8px 12px; border-bottom: 1px solid #ececef; text-align: left; }
-  :where(body th) { font-weight: 600; color: #0a0a0a; background: #fafafb; }
+  :where(body hr) { border: 0; border-top: 1px solid #e5e5e5; margin: 32px 0; }
+  :where(body table) { border-collapse: collapse; margin: 0 0 18px; font-size: 15px; }
+  :where(body th, body td) { padding: 8px 12px; border-bottom: 1px solid #e5e5e5; text-align: left; }
+  :where(body th) { font-weight: 600; color: #111; }
   :where(body figcaption) { font-size: 13px; color: #666; margin-top: 6px; text-align: center; }
   /* Doc imagery only — exclude overlay UI so icons inside the bar / chips /
      buttons / cards keep their inline layout instead of stacking to 16px tall. */
