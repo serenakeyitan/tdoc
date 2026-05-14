@@ -641,6 +641,12 @@
   // (node, offsetInString) map. Selections often span multiple text nodes
   // (e.g. across <b>, <a>, <em>), so a per-node indexOf would miss them.
   // Searching the flattened string handles that uniformly.
+  // Build a flat view of the document's commentable text plus a per-text-node
+  // offset map. We also build a *normalized* projection where every run of
+  // whitespace collapses to a single space. Multi-paragraph selections — which
+  // `Selection.toString()` returns with embedded "\n\n" — match against the
+  // normalized projection; the projection→raw map lets us recover the exact
+  // text-node/offset pair for the Range.
   function collectTextNodes() {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
@@ -654,57 +660,93 @@
     });
     const nodes = [];
     let total = '';
+    // norm[i] = raw-string offset corresponding to normalized-string offset i.
+    let norm = '';
+    const normToRaw = [];
+    let prevWasSpace = false;
     while (walker.nextNode()) {
       const n = walker.currentNode;
-      nodes.push({ node: n, start: total.length, end: total.length + n.nodeValue.length });
-      total += n.nodeValue;
+      const start = total.length;
+      const v = n.nodeValue;
+      nodes.push({ node: n, start, end: start + v.length });
+      total += v;
+      // If the previous block ended on non-space content and the next text
+      // node lives under a different block-level parent, treat the boundary
+      // as a single space in the normalized projection. This is what makes
+      // "para1\n\npara2" (from Selection.toString) collapse to "para1 para2".
+      for (let i = 0; i < v.length; i++) {
+        const ch = v.charCodeAt(i);
+        const isWs = ch === 0x20 || ch === 0x09 || ch === 0x0a || ch === 0x0d || ch === 0xa0;
+        if (isWs) {
+          if (!prevWasSpace && norm.length) {
+            norm += ' ';
+            normToRaw.push(start + i);
+            prevWasSpace = true;
+          }
+        } else {
+          norm += v[i];
+          normToRaw.push(start + i);
+          prevWasSpace = false;
+        }
+      }
     }
-    return { nodes, total };
+    // Sentinel: normToRaw.length === norm.length, plus one trailing entry so
+    // end offsets at the very end of the doc still translate.
+    normToRaw.push(total.length);
+    return { nodes, total, norm, normToRaw };
   }
-  // Locate (node, offset) in the per-node map from a global string offset.
-  function locateAt(nodes, globalOffset) {
-    // Binary search keeps refresh O(N + C log N) instead of O(N · C).
+  function normalizeQuery(s) {
+    return s ? s.replace(/\s+/g, ' ').trim() : '';
+  }
+  // Locate (node, offset) in the per-node map from a raw-string offset.
+  function locateAt(nodes, rawOffset) {
     let lo = 0, hi = nodes.length - 1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
       const n = nodes[mid];
-      if (globalOffset < n.start) hi = mid - 1;
-      else if (globalOffset > n.end) lo = mid + 1;
-      else return { node: n.node, offset: globalOffset - n.start };
+      if (rawOffset < n.start) hi = mid - 1;
+      else if (rawOffset > n.end) lo = mid + 1;
+      else return { node: n.node, offset: rawOffset - n.start };
     }
     return null;
   }
   function findTextRange(anchor, cache) {
     if (!anchor || !anchor.text || anchor.text.length < 2) return null;
-    const needle = anchor.text;
-    const before = anchor.context_before || '';
-    const after = anchor.context_after || '';
-    const { nodes, total } = cache || collectTextNodes();
-    if (!total) return null;
+    const view = cache || collectTextNodes();
+    if (!view.norm) return null;
 
-    // Collect every occurrence of the needle; pick the one whose surrounding
-    // context best matches the saved before/after. Empty context => first hit.
+    // Search the normalized projection so multi-paragraph anchors (saved with
+    // "\n\n" from Selection.toString) still match the doc text (which
+    // collectTextNodes concatenates without separators).
+    const needleN = normalizeQuery(anchor.text);
+    if (needleN.length < 2) return null;
+    const beforeN = normalizeQuery(anchor.context_before);
+    const afterN = normalizeQuery(anchor.context_after);
+
     const hits = [];
-    for (let i = 0; (i = total.indexOf(needle, i)) !== -1; i += Math.max(1, needle.length)) {
+    for (let i = 0; (i = view.norm.indexOf(needleN, i)) !== -1; i += Math.max(1, needleN.length)) {
       hits.push(i);
-      if (hits.length > 64) break; // safety
+      if (hits.length > 64) break;
     }
     if (!hits.length) return null;
 
     let bestIdx = hits[0], bestScore = -1;
     const ctxLen = 20;
-    const bTail = before.slice(-Math.min(ctxLen, before.length));
-    const aHead = after.slice(0, Math.min(ctxLen, after.length));
+    const bTail = beforeN.slice(-Math.min(ctxLen, beforeN.length));
+    const aHead = afterN.slice(0, Math.min(ctxLen, afterN.length));
     for (const h of hits) {
-      const beforeSlice = total.slice(Math.max(0, h - ctxLen), h);
-      const afterSlice = total.slice(h + needle.length, h + needle.length + ctxLen);
+      const beforeSlice = view.norm.slice(Math.max(0, h - ctxLen), h);
+      const afterSlice = view.norm.slice(h + needleN.length, h + needleN.length + ctxLen);
       let score = 0;
       if (bTail && beforeSlice.endsWith(bTail)) score += 2;
       if (aHead && afterSlice.startsWith(aHead)) score += 2;
       if (score > bestScore) { bestScore = score; bestIdx = h; }
     }
-    const startLoc = locateAt(nodes, bestIdx);
-    const endLoc = locateAt(nodes, bestIdx + needle.length);
+    // Map normalized offsets back to raw text-node offsets.
+    const rawStart = view.normToRaw[bestIdx];
+    const rawEnd = view.normToRaw[bestIdx + needleN.length] ?? view.total.length;
+    const startLoc = locateAt(view.nodes, rawStart);
+    const endLoc = locateAt(view.nodes, rawEnd);
     if (!startLoc || !endLoc) return null;
     const range = document.createRange();
     try {
