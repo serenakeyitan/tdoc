@@ -275,14 +275,11 @@ When the user reports a problem, check these first:
 - Prefer SVG over canvas for diagrams (commentable text). Use canvas for heavy simulations.
 - Default font stack: `system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`. Mono: `ui-monospace, "SF Mono", Menlo, monospace`.
 
-### Required container structure
+### Default styling — DO NOT re-style the doc
 
-Wrap the doc content in a single container element with one of these selectors: **`.wrap`** (preferred), `main`, `article`, `.content`, or `.container`. The overlay relies on this to:
-- Detect article width for the responsive breakpoint
-- Anchor the article to the LEFT when there are comments (so growing/shrinking the window preserves the right-side comment column)
-- Calculate where comment cards land
+The overlay injects a complete default template: typography (system font stack), heading sizes (h1=36px, h2=26px, h3=20px), body text (17px, line-height 1.65), lists, code blocks, blockquotes, tables, links, hr, figcaption — all consistent across every doc. **Don't write your own CSS for these unless the doc genuinely needs a different aesthetic** (a presentation, a landing page, etc.). Reading docs, essays, and reports should not override the template.
 
-Example (always use this skeleton for new docs):
+What to write:
 
 ```html
 <!doctype html>
@@ -290,16 +287,11 @@ Example (always use this skeleton for new docs):
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
-  <style>
-    body { margin: 0; font: 17px/1.6 system-ui, sans-serif; color: #111; background: #fff; }
-    .wrap { max-width: 720px; padding: 56px 24px 80px; }
-    h1 { font-size: 32px; margin: 0 0 24px; }
-    p { margin: 0 0 16px; }
-    /* ... */
-  </style>
 </head><body>
   <div class="wrap">
-    <!-- doc content here -->
+    <h1>{title}</h1>
+    <p class="meta">{subtitle or attribution}</p>
+    <!-- content here using plain <h2>, <h3>, <p>, <ul>, <pre>, <table>, etc. -->
   </div>
   <script>
     /* any interactivity, inline */
@@ -307,7 +299,24 @@ Example (always use this skeleton for new docs):
 </body></html>
 ```
 
-Note: the container should **not** have `margin: 0 auto`. The overlay will set its margins itself based on comment state. (If you write `margin: 0 auto`, the overlay overrides it with `!important`.)
+The overlay's `:where()` defaults handle:
+- Centered article column (`max-width: 720px`, padded)
+- All heading sizes, weights, spacing
+- Paragraph + list spacing
+- Code/pre, blockquote, table styling
+- Link color
+- Image margins
+
+Only add CSS for **doc-specific** content (a custom widget, a simulation, a chart). When you do, scope it tightly (e.g. `.my-slider { ... }`), not `body p { ... }`.
+
+### Required container structure
+
+Wrap the doc content in a single container element with one of these selectors: **`.wrap`** (preferred), `main`, `article`, `.content`, or `.container`. The overlay relies on this to:
+- Detect article width for the responsive breakpoint
+- Anchor the article to the LEFT when there are comments (so growing/shrinking the window preserves the right-side comment column)
+- Calculate where comment cards land
+
+Note: the container should **not** have `margin: 0 auto`. The overlay sets its margins itself based on comment state (overrides with `!important` if you write it).
 
 ### Required: explicit body background
 

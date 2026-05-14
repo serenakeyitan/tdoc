@@ -89,6 +89,48 @@
      320px) space via its own margin auto. As the window shrinks, the symmetric
      margins shrink with it; once they hit the article's min width, narrow-mode
      takes over and the drawer kicks in. */
+  /* ========== Default doc template (single typography template) ==========
+     One canonical look for every tdoc doc: same font stack, sizes, spacing,
+     headings, lists, code, tables, quotes. Wrapped in :where() so a doc that
+     truly needs a different aesthetic can override per element. Future
+     templates would live alongside this block, switched by a body class. */
+  :where(body) {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+    color: #1a1a1a;
+    background: #fff;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+  :where(body h1) { font-size: 36px; line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 12px; color: #0a0a0a; }
+  :where(body h2) { font-size: 26px; line-height: 1.3; font-weight: 700; letter-spacing: -0.015em; margin: 40px 0 12px; color: #0a0a0a; }
+  :where(body h3) { font-size: 20px; line-height: 1.35; font-weight: 600; margin: 28px 0 8px; color: #0a0a0a; }
+  :where(body h4) { font-size: 17px; font-weight: 600; margin: 20px 0 6px; color: #0a0a0a; }
+  :where(body h5, body h6) { font-size: 15px; font-weight: 600; margin: 16px 0 4px; color: #0a0a0a; text-transform: uppercase; letter-spacing: 0.05em; }
+  :where(body p) { margin: 0 0 16px; }
+  :where(body a) { color: #1652f0; text-decoration: underline; text-underline-offset: 2px; }
+  :where(body a:hover) { text-decoration-thickness: 2px; }
+  :where(body ul, body ol) { margin: 0 0 16px; padding-left: 24px; }
+  :where(body li) { margin: 4px 0; }
+  :where(body blockquote) { margin: 0 0 16px; padding: 4px 16px; border-left: 3px solid #d4d4d4; color: #555; }
+  :where(body code) { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.9em; background: #f4f4f5; padding: 1px 5px; border-radius: 4px; }
+  :where(body pre) { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; line-height: 1.55; background: #f8f8f9; padding: 14px 16px; border-radius: 8px; border: 1px solid #ececef; margin: 0 0 16px; overflow-x: auto; }
+  :where(body pre code) { background: transparent; padding: 0; border-radius: 0; }
+  :where(body hr) { border: 0; border-top: 1px solid #ececef; margin: 32px 0; }
+  :where(body table) { border-collapse: collapse; margin: 0 0 16px; font-size: 15px; }
+  :where(body th, body td) { padding: 8px 12px; border-bottom: 1px solid #ececef; text-align: left; }
+  :where(body th) { font-weight: 600; color: #0a0a0a; background: #fafafb; }
+  :where(body figcaption) { font-size: 13px; color: #666; margin-top: 6px; text-align: center; }
+  :where(body img, body svg, body canvas, body video) { display: block; margin: 16px auto; border-radius: 6px; }
+  /* Reading column for the doc container. :where() so a doc's own rule wins. */
+  :where(body > .wrap, body > main, body > article, body > .content, body > .container) {
+    max-width: 720px;
+    padding: 56px 24px 80px;
+    box-sizing: border-box;
+  }
+  /* End default template. ====================================================== */
+
   /* Defensive responsive defaults for artifacts. Docs sometimes hardcode pixel
      widths (e.g. <canvas width="640">) that overflow on phones. These rules
      constrain every artifact to its container width without changing its
@@ -275,14 +317,24 @@
   .tdoc-modal .danger { color: #c33; font-size: 13px; }
   .tdoc-modal code { background: #f5f6f8; padding: 1px 5px; border-radius: 3px; }
 
-  /* Narrow mode (drawer + FAB) */
-  body.tdoc-narrow .tdoc-bar .slug, body.tdoc-narrow .tdoc-bar #tdoc-fork-btn, body.tdoc-narrow .tdoc-bar #tdoc-home-btn, body.tdoc-narrow .tdoc-bar #tdoc-publish-btn, body.tdoc-narrow .tdoc-bar #tdoc-share-btn, body.tdoc-narrow .tdoc-bar #tdoc-saveas-btn { display: none; }
-  body.tdoc-narrow .tdoc-bar .tdoc-secondary-toggle { display: inline-flex; }
-  body.tdoc-narrow .tdoc-bar .title { font-size: 13px; max-width: 50vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  body.tdoc-narrow .tdoc-chip .name { display: none; }
-  body.tdoc-narrow .tdoc-chip { padding: 3px; }
-  body.tdoc-narrow .tdoc-chip.signin { padding: 6px 10px; font-size: 12px; }
-  body.tdoc-narrow .tdoc-chip.signin .name { display: inline; }
+  /* Top bar collapse — tied to the *viewport* width, not the layout class.
+     The previous rule hung off body.tdoc-narrow, which depends on article-
+     width measurements that flicker as comments load (toggling
+     tdoc-has-comments → padding-right → article shrinks → re-evaluates →
+     class flips). Pin the bar layout to a media query so it stays stable
+     regardless of comment state. */
+  @media (max-width: 900px) {
+    .tdoc-bar .slug, .tdoc-bar #tdoc-fork-btn, .tdoc-bar #tdoc-home-btn, .tdoc-bar #tdoc-publish-btn, .tdoc-bar #tdoc-share-btn, .tdoc-bar #tdoc-saveas-btn { display: none; }
+    .tdoc-bar .tdoc-secondary-toggle { display: inline-flex; }
+    .tdoc-bar .title { font-size: 13px; max-width: 50vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tdoc-chip .name { display: none; }
+    .tdoc-chip { padding: 3px; }
+    .tdoc-chip.signin { padding: 6px 10px; font-size: 12px; }
+    .tdoc-chip.signin .name { display: inline; }
+  }
+
+  /* Narrow mode (drawer + FAB) — still driven by the layout evaluator so
+     it can also kick in when the comment column would crowd the article. */
   body.tdoc-narrow #tdoc-comment-layer { position: fixed; top: auto; left: 0; right: 0; bottom: 0; max-height: 70vh; width: 100%; pointer-events: auto; background: #fff; border-top: 1px solid #e5e5e5; box-shadow: 0 -4px 24px rgba(0,0,0,0.08); transform: translateY(100%); transition: transform .2s; overflow-y: auto; padding: 12px 12px 24px; box-sizing: border-box; z-index: 999998; }
   body.tdoc-narrow #tdoc-comment-layer.open { transform: translateY(0); }
   body.tdoc-narrow #tdoc-comment-layer .tdoc-drawer-handle { display: block; width: 36px; height: 4px; background: #ccc; border-radius: 2px; margin: 0 auto 12px; cursor: grab; touch-action: none; user-select: none; }
