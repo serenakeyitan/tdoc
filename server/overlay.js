@@ -1463,23 +1463,37 @@
         // Dragged but no artifact hit — likely a text selection. Fall through.
       }
     }
-    // Not a drag — text-selection popup behavior.
-    if (isInUI(e.target)) return;
-    if (e.target && e.target.nodeType === 1) {
-      const commentable = e.target.matches?.(COMMENTABLE) ? e.target : e.target.closest?.(COMMENTABLE);
+    maybeOpenSelectionPopup(e.target);
+  }, true);
+
+  // Mouse and touch both surface here. On iOS Safari long-press text-selection
+  // does NOT fire mouseup, so we also listen for touchend. selectionchange
+  // would seem cleaner but fires continuously during a drag — touchend gives
+  // us a single "selection finished" signal.
+  document.addEventListener('touchend', (e) => {
+    const t = e.target || (e.changedTouches?.[0] && document.elementFromPoint(e.changedTouches[0].clientX, e.changedTouches[0].clientY));
+    // Touchend fires before the OS finalizes selection — defer one tick.
+    setTimeout(() => maybeOpenSelectionPopup(t), 0);
+  }, true);
+
+  function maybeOpenSelectionPopup(target) {
+    if (target && target.nodeType === 1) {
+      if (isInUI(target)) return;
+      const commentable = target.matches?.(COMMENTABLE) ? target : target.closest?.(COMMENTABLE);
       if (commentable && !isInUI(commentable)) return;
     }
-    // Snapshot selection synchronously — the trailing click can collapse it.
     const sel = window.getSelection();
     const text = sel && sel.toString().trim();
     if (!text || text.length < 2 || !sel.rangeCount) return;
+    // Skip if the selection is inside our own UI (e.g. user selected text in a popup).
+    const anchorNode = sel.anchorNode;
+    const anchorEl = anchorNode?.nodeType === 1 ? anchorNode : anchorNode?.parentElement;
+    if (anchorEl && isInUI(anchorEl)) return;
     const range = sel.getRangeAt(0).cloneRange();
     const rect = range.getBoundingClientRect();
     const ctx = getContext(range, 60);
-    setTimeout(() => {
-      openPopup({ kind: 'text', text, context_before: ctx.before, context_after: ctx.after, _range: range }, rect);
-    }, 0);
-  }, true);
+    openPopup({ kind: 'text', text, context_before: ctx.before, context_after: ctx.after, _range: range }, rect);
+  }
 
   // ========== Hover affordance ==========
   // ========== Artifact hover affordance ==========
