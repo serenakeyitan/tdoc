@@ -20,7 +20,7 @@
 cp SKILL.md skills/tdoc/SKILL.md
 ```
 
-before committing any change that touches `SKILL.md`. A pre-commit hook handles this automatically (see below).
+before committing any change that touches `SKILL.md`. There is no automated hook for this yet — keep them in sync manually.
 
 ## Two install paths
 
@@ -39,14 +39,20 @@ This project owes its concept to Jesse Pollak's bdocs at Coinbase. When you add 
 
 ```bash
 # fast, no network
-node test/onboarding.test.js
-node test/api.test.js          # requires local server running
+node test/onboarding.test.js   # 13 cases — doctor / install state
+node test/publish.test.js      #  6 cases — local publish flow
+node test/api.test.js          #  8 cases — needs local server running
 
-# slower, hits the published worker
-node test/ui.test.js
+# Playwright (uses headless Chromium)
+node test/ui.test.js           # 29 cases — overlay, popup, comments
+node test/responsive.test.js   # 15 cases — viewport widths
 
 # full integration (real Cloudflare round-trip)
 TDOC_INTEGRATION=1 node test/onboarding.test.js
 ```
 
 All tests should pass before any commit to `main`.
+
+## Hard rule: run tests before every push
+
+The skill ships JS that runs in users' browsers and a worker that runs on Cloudflare. Both are deployed on every `/tdoc publish`. Run the relevant test file before pushing — overlay changes → `ui.test.js`, worker/API changes → `api.test.js`. Doc-only changes still need a `grep` for stale references.

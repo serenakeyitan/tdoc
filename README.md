@@ -1,6 +1,6 @@
 # tdoc — google doc, but designed for agents
 
-Try a sample: https://tdoc.serenatan.workers.dev/d/conway-life/v/2
+See it live: https://tdoc.serenatan.workers.dev
 
 <img width="1149" height="603" alt="Screenshot 2026-05-13 at 00 21 01" src="https://github.com/user-attachments/assets/f89b12fa-6661-49b6-b9eb-dc0677e3cf1b" />
 
@@ -72,11 +72,13 @@ Or via the plugin marketplace: `/plugin marketplace add serenakeyitan/tdoc`
 ## Testing
 
 ```bash
-node test/responsive.test.js        # 46 Playwright viewport tests
-node test/ui.test.js                # 28 UI tests
-node test/dimensions-audit.js       # 26-width responsive audit
-node test/onboarding.test.js        # 9 mocked onboarding scenarios
-TDOC_INTEGRATION=1 node test/onboarding.test.js   # +4 real Cloudflare round-trip
+node test/ui.test.js                # 29 UI / overlay cases (drag-to-select, popup, comments)
+node test/responsive.test.js        # 15 Playwright viewport cases
+node test/api.test.js               # 8 local-server API cases (requires running server)
+node test/publish.test.js           #  6 publish-flow cases
+node test/onboarding.test.js        # 13 doctor/onboarding cases (mocked)
+TDOC_INTEGRATION=1 node test/onboarding.test.js   # + real Cloudflare round-trip
+node test/dimensions-audit.js       # responsive screenshots across widths
 ```
 
 ## Credit

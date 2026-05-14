@@ -160,6 +160,11 @@ setup: prompts `wrangler login`, creates an R2 bucket (`tdoc-docs`) and KV
 namespace (`META`) in *your* Cloudflare account, generates an upload token, and
 deploys your own Worker. Config is saved to `~/.tdoc/published.json`.
 
+Subsequent runs upload the latest version of `<slug>`. The script also detects
+when `server/overlay.js` or `worker/worker.js` is newer than the bundled file
+and redeploys the Worker automatically so users get the latest overlay code.
+Set `TDOC_SKIP_WORKER_DEPLOY=1` to skip the redeploy (useful for batch uploads).
+
 On published docs, viewers sign in with GitHub (Device Flow, shared OAuth App
 `Ov23liZ1UAGOchvKPmlS`, scope `read:user`) before commenting.
 
