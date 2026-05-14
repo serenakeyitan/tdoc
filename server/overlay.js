@@ -547,37 +547,80 @@
   document.body.appendChild(footer);
 
   // ========== Anchor matching (text → Range, element → Element) ==========
-  // Find the best Range matching anchor.text. Walks all text nodes outside our
-  // own UI, ranks candidates by context_before/after fit.
-  function findTextRange(anchor) {
-    if (!anchor || !anchor.text || anchor.text.length < 2) return null;
-    const needle = anchor.text;
-    const before = anchor.context_before || '';
-    const after = anchor.context_after || '';
+  // Flatten the document's commentable text into one string, plus a parallel
+  // (node, offsetInString) map. Selections often span multiple text nodes
+  // (e.g. across <b>, <a>, <em>), so a per-node indexOf would miss them.
+  // Searching the flattened string handles that uniformly.
+  function collectTextNodes() {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
         if (!n.parentElement) return NodeFilter.FILTER_REJECT;
         if (n.parentElement.closest('.tdoc-bar, .tdoc-popup, .tdoc-modal-bg, #tdoc-comment-layer, .tdoc-footer')) return NodeFilter.FILTER_REJECT;
+        // Skip script/style/template etc — their .textContent is irrelevant.
+        const tag = n.parentElement.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEMPLATE' || tag === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
-    let best = null, bestScore = -1;
+    const nodes = [];
+    let total = '';
     while (walker.nextNode()) {
-      const node = walker.currentNode;
-      const idx = node.nodeValue.indexOf(needle);
-      if (idx === -1) continue;
-      const beforeSlice = node.nodeValue.slice(Math.max(0, idx - before.length), idx);
-      const afterStart = idx + needle.length;
-      const afterSlice = node.nodeValue.slice(afterStart, afterStart + after.length);
-      let score = 0;
-      if (before && beforeSlice.endsWith(before.slice(-Math.min(20, before.length)))) score += 2;
-      if (after && afterSlice.startsWith(after.slice(0, Math.min(20, after.length)))) score += 2;
-      if (score > bestScore) { best = { node, idx }; bestScore = score; }
+      const n = walker.currentNode;
+      nodes.push({ node: n, start: total.length, end: total.length + n.nodeValue.length });
+      total += n.nodeValue;
     }
-    if (!best) return null;
+    return { nodes, total };
+  }
+  // Locate (node, offset) in the per-node map from a global string offset.
+  function locateAt(nodes, globalOffset) {
+    // Binary search keeps refresh O(N + C log N) instead of O(N · C).
+    let lo = 0, hi = nodes.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const n = nodes[mid];
+      if (globalOffset < n.start) hi = mid - 1;
+      else if (globalOffset > n.end) lo = mid + 1;
+      else return { node: n.node, offset: globalOffset - n.start };
+    }
+    return null;
+  }
+  function findTextRange(anchor, cache) {
+    if (!anchor || !anchor.text || anchor.text.length < 2) return null;
+    const needle = anchor.text;
+    const before = anchor.context_before || '';
+    const after = anchor.context_after || '';
+    const { nodes, total } = cache || collectTextNodes();
+    if (!total) return null;
+
+    // Collect every occurrence of the needle; pick the one whose surrounding
+    // context best matches the saved before/after. Empty context => first hit.
+    const hits = [];
+    for (let i = 0; (i = total.indexOf(needle, i)) !== -1; i += Math.max(1, needle.length)) {
+      hits.push(i);
+      if (hits.length > 64) break; // safety
+    }
+    if (!hits.length) return null;
+
+    let bestIdx = hits[0], bestScore = -1;
+    const ctxLen = 20;
+    const bTail = before.slice(-Math.min(ctxLen, before.length));
+    const aHead = after.slice(0, Math.min(ctxLen, after.length));
+    for (const h of hits) {
+      const beforeSlice = total.slice(Math.max(0, h - ctxLen), h);
+      const afterSlice = total.slice(h + needle.length, h + needle.length + ctxLen);
+      let score = 0;
+      if (bTail && beforeSlice.endsWith(bTail)) score += 2;
+      if (aHead && afterSlice.startsWith(aHead)) score += 2;
+      if (score > bestScore) { bestScore = score; bestIdx = h; }
+    }
+    const startLoc = locateAt(nodes, bestIdx);
+    const endLoc = locateAt(nodes, bestIdx + needle.length);
+    if (!startLoc || !endLoc) return null;
     const range = document.createRange();
-    range.setStart(best.node, best.idx);
-    range.setEnd(best.node, best.idx + needle.length);
+    try {
+      range.setStart(startLoc.node, startLoc.offset);
+      range.setEnd(endLoc.node, endLoc.offset);
+    } catch { return null; }
     return range;
   }
   function findElement(anchor) {
@@ -976,10 +1019,12 @@
     const fabCount = document.getElementById('tdoc-fab-count');
     if (fabCount) fabCount.textContent = state.activeComments.length;
 
+    const textCache = state.activeComments.some(c => (c.anchor?.kind || (c.anchor?.text ? 'text' : null)) === 'text')
+      ? collectTextNodes() : null;
     for (const comment of state.activeComments) {
       const kind = comment.anchor?.kind || (comment.anchor?.text ? 'text' : null);
       if (kind === 'text') {
-        const range = findTextRange(comment.anchor);
+        const range = findTextRange(comment.anchor, textCache);
         if (range) {
           if (HIGHLIGHT_API) {
             state.anchorMarks.set(comment.id, { kind: 'text', ranges: [range] });
@@ -1303,12 +1348,18 @@
   }
 
   function getContext(range, chars) {
+    // Use the same flattened-text view that findTextRange searches, so saved
+    // context can disambiguate hits across element boundaries.
     try {
-      const fullText = range.startContainer.textContent || '';
-      const start = range.startOffset, end = range.endOffset;
+      const { nodes, total } = collectTextNodes();
+      const startLoc = nodes.find(n => n.node === range.startContainer);
+      const endLoc = nodes.find(n => n.node === range.endContainer);
+      if (!startLoc || !endLoc) return { before: '', after: '' };
+      const startG = startLoc.start + range.startOffset;
+      const endG = endLoc.start + range.endOffset;
       return {
-        before: fullText.slice(Math.max(0, start - chars), start),
-        after: fullText.slice(end, end + chars)
+        before: total.slice(Math.max(0, startG - chars), startG),
+        after: total.slice(endG, endG + chars),
       };
     } catch { return { before: '', after: '' }; }
   }
