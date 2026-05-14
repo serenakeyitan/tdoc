@@ -122,7 +122,9 @@
   :where(body th, body td) { padding: 8px 12px; border-bottom: 1px solid #ececef; text-align: left; }
   :where(body th) { font-weight: 600; color: #0a0a0a; background: #fafafb; }
   :where(body figcaption) { font-size: 13px; color: #666; margin-top: 6px; text-align: center; }
-  :where(body img, body svg, body canvas, body video) { display: block; margin: 16px auto; border-radius: 6px; }
+  /* Doc imagery only — exclude overlay UI so icons inside the bar / chips /
+     buttons / cards keep their inline layout instead of stacking to 16px tall. */
+  :where(body img, body svg, body canvas, body video):not(.tdoc-bar *):not(.tdoc-margin-comment *):not(.tdoc-popup *):not(.tdoc-modal-bg *):not(.tdoc-chip *):not(.tdoc-fab *):not(#tdoc-comment-layer *):not(.tdoc-footer *) { display: block; margin: 16px auto; border-radius: 6px; }
   /* Reading column for the doc container. :where() so a doc's own rule wins. */
   :where(body > .wrap, body > main, body > article, body > .content, body > .container) {
     max-width: 720px;
