@@ -31,23 +31,44 @@ WORKER_DIR="$SKILL_DIR/worker"
 
 mkdir -p "$CONFIG_DIR"
 
+# When publishing fails for a setup reason (missing dep, R2 not enabled,
+# wrangler logged out), we emit a paste-into-agent prompt instead of a
+# cryptic shell error. The publish modal surfaces stderr to the user, so
+# they get a single block they can hand to Claude Code / Codex which then
+# walks them through the fix.
+fail_with_agent_prompt() {
+  local reason="$1"
+  local prompt="$2"
+  cat >&2 <<EOF
+[tdoc] publish failed: $reason
+
+To fix this without reading docs, paste the prompt below into Claude Code,
+Codex, or any coding agent — it will resolve the issue and re-run publish:
+
+────────────────────────────────────────────────────────────────────────
+$prompt
+────────────────────────────────────────────────────────────────────────
+EOF
+  exit 1
+}
+
 # Deps
 if ! command -v wrangler >/dev/null 2>&1; then
-  echo "tdoc publish needs wrangler. Install with: npm i -g wrangler" >&2
-  exit 1
+  fail_with_agent_prompt "wrangler is not installed" \
+    "Install Cloudflare wrangler globally so tdoc can publish: run 'npm i -g wrangler' (or 'pnpm add -g wrangler'). After it's installed, run '/tdoc publish $SLUG' again."
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  echo "tdoc publish needs jq. Install with: brew install jq  (or apt-get install jq)" >&2
-  exit 1
+  fail_with_agent_prompt "jq is not installed" \
+    "Install jq so tdoc can build its publish payload. On macOS: 'brew install jq'. On Debian/Ubuntu: 'sudo apt-get install -y jq'. Then run '/tdoc publish $SLUG' again."
 fi
 if ! command -v node >/dev/null 2>&1; then
-  echo "tdoc publish needs node 18+." >&2
-  exit 1
+  fail_with_agent_prompt "node 18+ is not installed" \
+    "Install Node.js 18 or newer (https://nodejs.org). On macOS: 'brew install node'. Verify with 'node --version'. Then run '/tdoc publish $SLUG' again."
 fi
 
 if [ ! -d "$DOC_DIR" ]; then
-  echo "no doc at $DOC_DIR — run /tdoc new <prompt> first." >&2
-  exit 1
+  fail_with_agent_prompt "no local doc at $DOC_DIR" \
+    "There is no tdoc document called '$SLUG' yet at $DOC_DIR. Either (a) create it now with '/tdoc new <prompt>' using the slug '$SLUG', or (b) ask the user which slug they meant and run '/tdoc list' to see what exists. Then run '/tdoc publish <correct-slug>'."
 fi
 
 # --- bundle overlay.js into worker source ---
@@ -103,12 +124,8 @@ first_time_setup() {
   SUBDOMAIN="$(echo "$sub_resp" | jq -r '.result.subdomain // empty')"
 
   if [ -z "$SUBDOMAIN" ] || [ "$SUBDOMAIN" = "null" ]; then
-    echo
-    echo "[tdoc] No workers.dev subdomain claimed on your account yet."
-    echo "      Claim one (one-time, ~10s) at:"
-    echo "        https://dash.cloudflare.com/$account_id/workers/onboarding"
-    echo "      Then re-run /tdoc publish $SLUG."
-    exit 1
+    fail_with_agent_prompt "no workers.dev subdomain claimed on Cloudflare account $account_id" \
+      "The user hasn't claimed a workers.dev subdomain yet — tdoc can't publish without one. Open this URL in their browser: https://dash.cloudflare.com/$account_id/workers/onboarding. Ask them to pick any name (usually their handle) and confirm. It's free and one-time. After they say done, run '/tdoc publish $SLUG' again."
   fi
   echo "[tdoc] subdomain: ${SUBDOMAIN}.workers.dev"
 
@@ -127,12 +144,8 @@ first_time_setup() {
   local r2_code
   r2_code="$(echo "$r2_resp" | jq -r '.errors[0].code // empty')"
   if [ "$r2_code" = "10042" ]; then
-    echo
-    echo "[tdoc] ⚠ R2 is not enabled on your Cloudflare account yet."
-    echo "       Enable it (one-click, free up to 10GB) at:"
-    echo "         https://dash.cloudflare.com/$account_id/r2"
-    echo "       Then re-run /tdoc publish $SLUG."
-    exit 1
+    fail_with_agent_prompt "R2 is not enabled on Cloudflare account $account_id" \
+      "The user hasn't enabled Cloudflare R2 yet — tdoc stores published docs there. Open https://dash.cloudflare.com/$account_id/r2 in their browser. Ask them to click 'Enable R2'. It's free up to 10GB, but they'll need to acknowledge Cloudflare's pricing page. After they say done, wait 10 seconds (the API is briefly stale) and run '/tdoc publish $SLUG' again."
   fi
   # 10004 = bucket already exists, which is fine
   if [ -n "$r2_code" ] && [ "$r2_code" != "10004" ]; then

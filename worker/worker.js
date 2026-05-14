@@ -99,6 +99,11 @@ async function indexHtml(env) {
     let meta = {};
     try { meta = JSON.parse(metaRaw || '{}'); } catch {}
     const latest = meta.versions?.[meta.versions.length - 1]?.n || 1;
+    // Only list docs whose latest version actually exists in R2 — otherwise
+    // the index advertises 404s. (We hit this when R2 writes silently failed
+    // while KV meta updates succeeded; defense in depth.)
+    const exists = await env.DOCS.head(`docs/${slug}/v${latest}/index.html`);
+    if (!exists) continue;
     rows.push(`<tr>
       <td><a href="/d/${slug}/v/${latest}">${(meta.title || slug).replace(/</g, '&lt;')}</a></td>
       <td>${slug}</td>
@@ -184,7 +189,7 @@ export default {
 
     // ---- doc view ----
     const docMatch = p.match(/^\/d\/([^/]+)\/v\/(\d+)\/?$/);
-    if (docMatch && method === 'GET') {
+    if (docMatch && (method === 'GET' || method === 'HEAD')) {
       const [, slug, vStr] = docMatch;
       const obj = await env.DOCS.get(`docs/${slug}/v${vStr}/index.html`);
       if (!obj) return text(`Not found: ${slug} v${vStr}`, { status: 404 });
@@ -517,11 +522,25 @@ export default {
       try { body = await req.json(); } catch {}
       const { slug, version, html: doc, meta } = body;
       if (!slug || !version || !doc) return json({ error: 'slug, version, html required' }, { status: 400 });
-      await env.DOCS.put(`docs/${slug}/v${version}/index.html`, doc, {
-        httpMetadata: { contentType: 'text/html; charset=utf-8' },
-      });
+      const r2Key = `docs/${slug}/v${version}/index.html`;
+      try {
+        await env.DOCS.put(r2Key, doc, {
+          httpMetadata: { contentType: 'text/html; charset=utf-8' },
+        });
+      } catch (e) {
+        console.log('[upload] R2 put failed:', e.message);
+        return json({ error: 'r2_put_failed', message: e.message }, { status: 500 });
+      }
+      // Verify the write actually landed before we tell the caller "ok".
+      // The previous handler returned ok: true even when the binding was
+      // silently dropping writes — leaving us with KV meta but no R2 doc.
+      const verify = await env.DOCS.head(r2Key);
+      if (!verify) {
+        console.log('[upload] R2 write did not persist:', r2Key);
+        return json({ error: 'r2_write_lost', message: 'PUT succeeded but the key is not readable. Re-deploy the worker; the R2 binding may be stale.' }, { status: 500 });
+      }
       if (meta) await env.META.put(`meta:${slug}`, JSON.stringify(meta));
-      return json({ ok: true, url: `/d/${slug}/v/${version}` });
+      return json({ ok: true, url: `/d/${slug}/v/${version}`, size: verify.size });
     }
 
     // ---- admin delete ----
