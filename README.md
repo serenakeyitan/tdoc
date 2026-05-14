@@ -4,6 +4,8 @@ See it live: https://tdoc.serenatan.workers.dev
 
 <img width="1149" height="603" alt="Screenshot 2026-05-13 at 00 21 01" src="https://github.com/user-attachments/assets/f89b12fa-6661-49b6-b9eb-dc0677e3cf1b" />
 
+> check out my recent work at https://github.com/agent-team-foundation/first-tree 🥇
+
 **Turn a prompt into an interactive HTML doc, share it as a live URL, get comments back.**
 
 Open-source take on Jesse Pollak's bdocs concept. Same idea: prose, sliders, charts, simulations — authored by an agent, not maintained by hand. The difference: tdoc deploys to **your own free Cloudflare Worker**, so you get a public shareable link with zero hosting cost and zero infra to manage.
