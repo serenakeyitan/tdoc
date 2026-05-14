@@ -136,7 +136,18 @@ async function ghPost(path, formObj) {
     },
     body,
   });
-  return r.json();
+  const ct = r.headers.get('content-type') || '';
+  const raw = await r.text();
+  // GitHub sometimes returns form-encoded even with Accept: application/json
+  // (notably the device-flow endpoints). Detect and parse both shapes.
+  if (ct.includes('application/json')) {
+    try { return JSON.parse(raw); } catch { return { error: 'gh_parse', error_description: raw.slice(0, 200) }; }
+  }
+  const params = new URLSearchParams(raw);
+  const out = {};
+  for (const [k, v] of params) out[k] = v;
+  if (!Object.keys(out).length) return { error: 'gh_empty', error_description: `status=${r.status} ct=${ct}` };
+  return out;
 }
 async function ghUser(token) {
   const r = await fetch('https://api.github.com/user', {
@@ -328,16 +339,23 @@ export default {
           device_code: body.device_code,
           grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
         });
+        // Log the response shape (visible in `wrangler tail`) so we can debug
+        // the post-approval path that's been hanging on "Waiting…".
+        console.log('[poll] gh response keys:', Object.keys(r).join(','), 'error:', r.error || 'none', 'has_token:', !!r.access_token);
         // GitHub returns errors *with* a 200 status. Pending states must keep
         // polling; everything else is a real failure surfaced to the user.
         if (r.error === 'authorization_pending' || r.error === 'slow_down') {
-          return json({ pending: true, error: r.error });
+          // Pass GitHub's suggested interval back to the client so it can
+          // back off when slow_down is signaled (RFC 8628 §3.5).
+          return json({ pending: true, error: r.error, interval: Number(r.interval) || null });
         }
         if (r.error) {
           return json({ error: r.error, message: r.error_description || r.error }, { status: 400 });
         }
         if (!r.access_token) return json({ pending: true });
+        console.log('[poll] got access_token, fetching /user');
         const user = await ghUser(r.access_token);
+        console.log('[poll] gh /user response keys:', Object.keys(user).join(','), 'login:', user.login || 'none');
         if (!user.login) return json({ error: 'no_user', message: user.message || 'GitHub /user returned no login' }, { status: 500 });
         const sid = rand(24);
         const session = {

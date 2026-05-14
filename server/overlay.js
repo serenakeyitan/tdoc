@@ -1126,7 +1126,12 @@
   if (window.ResizeObserver) new ResizeObserver(() => repositionCards()).observe(document.body);
 
   // ========== Auth (Device Flow) ==========
+  // GitHub returns "slow_down" if we poll faster than its current interval —
+  // and once it does, we must bump our interval by ≥5s or it will keep
+  // refusing forever. Use a chained setTimeout so each tick can adjust the
+  // delay before scheduling the next.
   let pollTimer = null;
+  let pollInterval = 5;
   async function startDeviceFlow() {
     if (!isPublished) return;
     const r = await fetch('/api/auth/device/start', { method: 'POST' });
@@ -1134,7 +1139,11 @@
     if (data.error) { alert('Sign-in error: ' + (data.message || data.error)); return; }
     showDeviceModal(data);
     window.open(data.verification_uri, '_blank');
-    pollTimer = setInterval(() => pollDevice(data.device_code), (data.interval || 5) * 1000);
+    pollInterval = Math.max(5, data.interval || 5);
+    schedulePoll(data.device_code);
+  }
+  function schedulePoll(device_code) {
+    pollTimer = setTimeout(() => pollDevice(device_code), pollInterval * 1000);
   }
   function showDeviceModal(data) {
     const bg = document.createElement('div');
@@ -1156,7 +1165,7 @@
   function closeDeviceModal() {
     const m = document.getElementById('tdoc-device-modal');
     if (m) m.remove();
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   }
 
   // ========== Publish / Share modals ==========
@@ -1252,6 +1261,7 @@
   }
   async function pollDevice(device_code) {
     const status = document.getElementById('tdoc-poll-status');
+    pollTimer = null;
     try {
       const r = await fetch('/api/auth/device/poll', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1265,21 +1275,33 @@
         refreshComments();
         return;
       }
-      // Surface any unexpected error so the user isn't stuck on "Waiting…" forever.
-      // GitHub's documented pending states keep polling silently.
-      if (data.error === 'authorization_pending' || data.error === 'slow_down' || (data.pending && !data.error)) return;
-      if (data.error === 'expired_token' || data.error === 'access_denied') {
-        if (status) status.textContent = 'Code expired or denied. Try again.';
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      // slow_down: GitHub explicitly told us to back off. Bump interval by 5s
+      // (per RFC 8628 §3.5) before scheduling the next poll, otherwise GitHub
+      // will keep rejecting at the same cadence forever.
+      if (data.error === 'slow_down') {
+        // GitHub may suggest a new interval; otherwise add 5s.
+        pollInterval = Math.max(pollInterval + 5, Number(data.interval) || 0);
+        schedulePoll(device_code);
         return;
       }
-      // Any other error (no_user, github_unreachable, 500) — show it and stop polling.
+      if (data.error === 'authorization_pending' || (data.pending && !data.error)) {
+        schedulePoll(device_code);
+        return;
+      }
+      if (data.error === 'expired_token' || data.error === 'access_denied') {
+        if (status) status.textContent = 'Code expired or denied. Try again.';
+        return;
+      }
+      // Any other error (no_user, github_unreachable, 500) — show it and stop.
       if (data.error || !r.ok) {
         if (status) status.textContent = 'Sign-in failed: ' + (data.message || data.error || `HTTP ${r.status}`) + '. Try again.';
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        return;
       }
+      // Fallback: unknown shape, keep polling at current interval.
+      schedulePoll(device_code);
     } catch (e) {
       if (status) status.textContent = 'Network error: ' + e.message + ' — retrying…';
+      schedulePoll(device_code);
     }
   }
 
