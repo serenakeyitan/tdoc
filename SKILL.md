@@ -165,7 +165,15 @@ silently is the #1 source of regression complaints.
 
 7. Update `comments.json`: set `status: "applied"` (or leave `"open"` for
    partial/question) and `applied_in: n+1`. The agent-reply endpoint
-   already flips the status server-side; this keeps the local file in sync.
+   already flips the status server-side AND drops a status emoji on the
+   parent comment (✅ applied, 🟡 partial, ❓ question), clearing any
+   previous agent emoji first. You don't need to send a separate reaction
+   request — the reply endpoint does it. Users see the verdict at a
+   glance from the comment cards without expanding replies.
+
+   If a comment is later re-anchored by the user (anchor moved to new
+   text), the server automatically clears the agent's emoji and resets
+   `status: "open"`. Re-running `/tdoc edit` will pick it up again.
 6. Open `http://localhost:7878/d/<slug>/v/<n+1>`.
 
 If there are zero open comments AND no extra prompt, ask the user what to change before doing anything.

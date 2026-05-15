@@ -222,6 +222,10 @@
   .tdoc-react-chip { position: relative; display: inline-flex; align-items: center; gap: 4px; font: 12px system-ui; background: #f5f6f8; border: 1px solid #e5e5e5; border-radius: 999px; padding: 2px 8px; cursor: pointer; color: #333; transition: background .12s, border-color .12s; }
   .tdoc-react-chip:hover { background: #eef0f3; }
   .tdoc-react-chip.mine { background: #e8eeff; border-color: #1652f0; color: #1652f0; }
+  /* Agent reactions get a tinted background so users can scan a long doc
+     and spot which comments the agent has already responded to. */
+  .tdoc-react-chip.agent { background: #f3eaff; border-color: #c3a8f0; color: #5a2da8; }
+  .tdoc-react-chip.agent.mine { background: #f3eaff; border-color: #c3a8f0; color: #5a2da8; }
   /* Custom reactors tooltip — shows the GitHub logins (or agent labels) of
      everyone who used this emoji. Native title= has ~1s delay; this is
      instant and styled to match the doc. */
@@ -840,7 +844,9 @@
     if (!entries.length) return '';
     const chips = entries.map(([emoji, users]) => {
       const mine = users.includes(me);
-      return `<span class="tdoc-react-chip${mine ? ' mine' : ''}" data-emoji="${escapeHtml(emoji)}" data-target-id="${target.id}" data-users="${users.map(escapeHtml).join('\n')}">${emoji} ${users.length}</span>`;
+      const hasAgent = users.includes('tdoc-agent');
+      const cls = [`tdoc-react-chip`, mine ? 'mine' : '', hasAgent ? 'agent' : ''].filter(Boolean).join(' ');
+      return `<span class="${cls}" data-emoji="${escapeHtml(emoji)}" data-target-id="${target.id}" data-users="${users.map(escapeHtml).join('\n')}">${emoji} ${users.length}</span>`;
     }).join('');
     return `<div class="tdoc-reactions" data-target-id="${target.id}">${chips}<button class="tdoc-react-add" data-target-id="${target.id}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button></div>`;
   }
@@ -929,8 +935,18 @@
     card.querySelectorAll('.del').forEach(del => {
       del.onclick = async (e) => {
         e.stopPropagation();
-        await fetch(`/api/comments?slug=${encodeURIComponent(slug)}&id=${del.dataset.id}`, { method: 'DELETE' });
-        refreshComments();
+        const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}&id=${del.dataset.id}`, { method: 'DELETE' });
+        if (!r.ok) {
+          // Surface the failure instead of silently re-rendering the comment.
+          const err = await r.json().catch(() => ({}));
+          alert('Could not delete: ' + (err.error || err.message || `HTTP ${r.status}`));
+          return;
+        }
+        // Belt + suspenders: drop the active highlight before refresh in case
+        // the deleted comment was the active one (which would leave a stale
+        // ::highlight(tdoc-anchor-active) ring until refresh completes).
+        setActiveComment(null);
+        await refreshComments();
       };
     });
 

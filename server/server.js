@@ -36,6 +36,27 @@ function readBody(req) {
 
 // Escape `</script>` and HTML comment terminators so a malicious or stray value
 // inside the JSON payload can't break out of the surrounding <script> block.
+// Replace `tdoc-agent`'s reaction on a comment with the emoji for the new
+// status. Removes any existing tdoc-agent reactions first so old state
+// can't outlive the new outcome (e.g. an "applied" ✅ after a later
+// "question" outcome on the same comment).
+const AGENT_STATUS_EMOJI = { applied: '✅', partial: '🟡', question: '❓' };
+function setAgentReaction(target, status) {
+  if (!target.reactions) target.reactions = {};
+  for (const emoji of Object.keys(target.reactions)) {
+    const users = target.reactions[emoji] || [];
+    const idx = users.indexOf('tdoc-agent');
+    if (idx >= 0) users.splice(idx, 1);
+    if (users.length === 0) delete target.reactions[emoji];
+    else target.reactions[emoji] = users;
+  }
+  const next = AGENT_STATUS_EMOJI[status];
+  if (!next) return;
+  const u = target.reactions[next] || [];
+  if (!u.includes('tdoc-agent')) u.push('tdoc-agent');
+  target.reactions[next] = u;
+}
+
 function safeJsonForScript(obj) {
   return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
 }
@@ -141,9 +162,15 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, entry);
   }
 
-  // Agent reply: posts a reply attributed to `tdoc-agent` and updates the
-  // parent comment's status. Local: no auth (anyone running the local server
-  // is the doc owner). Mirrors /api/agent/reply on the published worker.
+  // Agent reply: posts a reply attributed to `tdoc-agent`, updates the
+  // parent comment's status, AND drops a status emoji on the parent's
+  // reactions row. Each status maps to a different emoji so the user can
+  // tell at a glance from the comment list which were addressed:
+  //   applied  -> ✅
+  //   partial  -> 🟡
+  //   question -> ❓
+  // The agent always clears its previous emoji on this comment first, so a
+  // stale "applied" emoji can't outlive a later "question" outcome.
   if (p === '/api/agent/reply' && req.method === 'POST') {
     const body = await readBody(req);
     const { slug, parent_id, text, status: agentStatus, applied_in } = body;
@@ -169,12 +196,16 @@ const server = http.createServer(async (req, res) => {
     } else if (agentStatus === 'question' || agentStatus === 'partial') {
       parent.status = 'open';
     }
+    setAgentReaction(parent, agentStatus);
     writeJson(file, all);
     return json(res, 200, reply);
   }
 
   // Re-anchor an existing comment without changing its text/thread state.
-  // Used by the "click unanchored, then select new text" flow.
+  // Used by the "click unanchored, then select new text" flow. Also clears
+  // the agent's prior status emoji + flips the comment back to "open" — a
+  // re-anchor means the comment now points at different text, so any old
+  // agent verdict is stale.
   if (p === '/api/comments' && req.method === 'PATCH') {
     const body = await readBody(req);
     const { slug, id, anchor } = body;
@@ -184,6 +215,9 @@ const server = http.createServer(async (req, res) => {
     const target = all.find(c => c.id === id);
     if (!target) return json(res, 404, { error: 'not_found' });
     target.anchor = anchor;
+    target.status = 'open';
+    delete target.applied_in;
+    setAgentReaction(target, null);
     writeJson(file, all);
     return json(res, 200, target);
   }

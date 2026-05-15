@@ -130,6 +130,27 @@ ${rows.length === 0 ? '<p class="empty">No published docs yet.</p>' :
 }
 
 // ---- GitHub helpers ----
+// Replace tdoc-agent's reaction on a target with the emoji for the new
+// status. See server.js setAgentReaction for the protocol. Kept inline
+// here because the worker bundles separately and can't import from the
+// local server.
+const AGENT_STATUS_EMOJI = { applied: '✅', partial: '🟡', question: '❓' };
+function setAgentReaction(target, status) {
+  if (!target.reactions) target.reactions = {};
+  for (const emoji of Object.keys(target.reactions)) {
+    const users = target.reactions[emoji] || [];
+    const idx = users.indexOf('tdoc-agent');
+    if (idx >= 0) users.splice(idx, 1);
+    if (users.length === 0) delete target.reactions[emoji];
+    else target.reactions[emoji] = users;
+  }
+  const next = AGENT_STATUS_EMOJI[status];
+  if (!next) return;
+  const u = target.reactions[next] || [];
+  if (!u.includes('tdoc-agent')) u.push('tdoc-agent');
+  target.reactions[next] = u;
+}
+
 async function ghPost(path, formObj) {
   const body = new URLSearchParams(formObj).toString();
   const r = await fetch(`https://github.com${path}`, {
@@ -457,7 +478,13 @@ export default {
       if (target.author && target.author.login !== s.login) {
         return json({ error: 'not_author' }, { status: 403 });
       }
+      // Re-anchoring repoints the comment at different text, so any prior
+      // agent verdict is stale — clear status/applied_in and the agent's
+      // reaction. The thread (replies, human reactions) stays.
       target.anchor = anchor;
+      target.status = 'open';
+      delete target.applied_in;
+      setAgentReaction(target, null);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
       return json(target);
     }
@@ -570,6 +597,7 @@ export default {
       } else if (agentStatus === 'question' || agentStatus === 'partial') {
         parent.status = 'open';
       }
+      setAgentReaction(parent, agentStatus);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
       return json(reply);
     }
