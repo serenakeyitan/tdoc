@@ -859,9 +859,26 @@
     normToRaw.push(total.length);
     return { nodes, total, norm, normToRaw };
   }
-  function normalizeQuery(s) {
+  // Collapse runs of whitespace into a single space so saved anchor text
+  // and the doc's normalized projection agree on inter-block boundaries.
+  // Two flavors:
+  //   normalizeNeedle: also trims edges. The user's selection often has
+  //     a stray leading/trailing newline that's not present in the doc
+  //     text we want to match against.
+  //   normalizeContext: preserves leading/trailing whitespace. Boundary
+  //     whitespace is what makes context disambiguation work — the doc's
+  //     normalized projection has a single space between block elements
+  //     before the needle, so trimming context tails would strand them at
+  //     punctuation and break commonSuffixLen.
+  function normalizeNeedle(s) {
     return s ? s.replace(/\s+/g, ' ').trim() : '';
   }
+  function normalizeContext(s) {
+    return s ? s.replace(/\s+/g, ' ') : '';
+  }
+  // Back-compat alias for older callers (getContext etc.) — they handle
+  // their own normalization where needed.
+  function normalizeQuery(s) { return normalizeNeedle(s); }
   // Locate (node, offset) in the per-node map from a raw-string offset.
   function locateAt(nodes, rawOffset) {
     let lo = 0, hi = nodes.length - 1;
@@ -895,10 +912,10 @@
     const view = cache || collectTextNodes();
     if (!view.norm) return null;
 
-    const needleN = normalizeQuery(anchor.text);
+    const needleN = normalizeNeedle(anchor.text);
     if (needleN.length < 2) return null;
-    const beforeN = normalizeQuery(anchor.context_before);
-    const afterN = normalizeQuery(anchor.context_after);
+    const beforeN = normalizeContext(anchor.context_before);
+    const afterN = normalizeContext(anchor.context_after);
 
     const hits = [];
     for (let i = 0; (i = view.norm.indexOf(needleN, i)) !== -1; i += Math.max(1, needleN.length)) {
