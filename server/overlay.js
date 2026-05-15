@@ -164,7 +164,7 @@
   .tdoc-bar-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 
   /* Workspace mark — circular dot like HackMD's logo. Clicks → /. */
-  .tdoc-bar-mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #1652f0; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; flex-shrink: 0; border: none; }
+  .tdoc-bar-mark { display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 12px; border-radius: 999px; background: #1652f0; color: #fff; font-weight: 700; font-size: 13px; letter-spacing: -0.01em; cursor: pointer; flex-shrink: 0; border: none; }
   .tdoc-bar-mark:hover { background: #1245d0; }
 
   /* Breadcrumb: workspace · slug · v3 — separated by " / ". */
@@ -524,7 +524,7 @@
 
   // Left group: workspace mark + slug crumb + version picker.
   const leftHtml = `
-    <button class="tdoc-bar-mark" id="tdoc-bar-mark" title="All docs" aria-label="All docs">t</button>
+    <button class="tdoc-bar-mark" id="tdoc-bar-mark" title="All docs" aria-label="All docs">tdoc</button>
     <span class="crumb crumb-slug" title="${escapeHtml(slugCrumbLabel)}">${escapeHtml(slugCrumbLabel)}</span>
     <span class="crumb-sep crumb-sep-slug" aria-hidden="true">/</span>
     <div class="tdoc-version-wrap">
@@ -874,14 +874,27 @@
     }
     return null;
   }
+  // Anchor matching protocol (architectural):
+  //
+  //   Invariant: a text anchor resolves only when the saved context_before /
+  //   context_after agrees with the candidate location. The same `text` may
+  //   appear N times in the doc; context is the disambiguator that picks
+  //   THIS occurrence — moving the anchor (re-anchor) rewrites the context
+  //   to the new neighbors, so the matcher MUST refuse to fall back to the
+  //   first hit when context fails to match. Without this guard, re-anchor
+  //   silently re-resolves to the old location whenever the old text still
+  //   exists in the doc (the "stale highlight" bug).
+  //
+  //   We compare longer context windows (60 chars by default, scaled down
+  //   to what was saved) for stronger disambiguation, and require at least
+  //   one side to match to accept the hit. If no candidate clears the bar,
+  //   return null and let the caller fall back to the saved position ratio.
+  const CTX_MATCH_LEN = 60;
   function findTextRange(anchor, cache) {
     if (!anchor || !anchor.text || anchor.text.length < 2) return null;
     const view = cache || collectTextNodes();
     if (!view.norm) return null;
 
-    // Search the normalized projection so multi-paragraph anchors (saved with
-    // "\n\n" from Selection.toString) still match the doc text (which
-    // collectTextNodes concatenates without separators).
     const needleN = normalizeQuery(anchor.text);
     if (needleN.length < 2) return null;
     const beforeN = normalizeQuery(anchor.context_before);
@@ -894,21 +907,44 @@
     }
     if (!hits.length) return null;
 
-    let bestIdx = hits[0], bestScore = -1;
-    const ctxLen = 20;
+    // Single hit and no saved context → unambiguous, accept.
+    // Multiple hits with no context → ambiguous, refuse.
+    const hasContext = beforeN.length > 0 || afterN.length > 0;
+    if (hits.length === 1 && !hasContext) {
+      return rangeFromNormalizedOffsets(view, hits[0], needleN.length);
+    }
+    if (!hasContext) return null;
+
+    // Score each hit by how many context chars match on each side. Require
+    // a *meaningful* match — at least MIN_CTX_MATCH chars — so we don't
+    // accept hits that only agree on trailing punctuation/spaces ("." or
+    // ": "). That guard is what makes re-anchor robust: when the user
+    // moves the anchor, the new context_before/after refer to the new
+    // neighbors; the old location's punctuation overlap shouldn't be
+    // enough to keep the highlight there.
+    const MIN_CTX_MATCH = 4;
+    const ctxLen = CTX_MATCH_LEN;
     const bTail = beforeN.slice(-Math.min(ctxLen, beforeN.length));
     const aHead = afterN.slice(0, Math.min(ctxLen, afterN.length));
+    let bestIdx = -1, bestScore = 0;
     for (const h of hits) {
       const beforeSlice = view.norm.slice(Math.max(0, h - ctxLen), h);
       const afterSlice = view.norm.slice(h + needleN.length, h + needleN.length + ctxLen);
-      let score = 0;
-      if (bTail && beforeSlice.endsWith(bTail)) score += 2;
-      if (aHead && afterSlice.startsWith(aHead)) score += 2;
+      const bScore = commonSuffixLen(beforeSlice, bTail);
+      const aScore = commonPrefixLen(afterSlice, aHead);
+      // A side counts only if it cleared the meaningful-match bar.
+      const score = (bScore >= MIN_CTX_MATCH ? bScore : 0) + (aScore >= MIN_CTX_MATCH ? aScore : 0);
       if (score > bestScore) { bestScore = score; bestIdx = h; }
     }
-    // Map normalized offsets back to raw text-node offsets.
-    const rawStart = view.normToRaw[bestIdx];
-    const rawEnd = view.normToRaw[bestIdx + needleN.length] ?? view.total.length;
+    // Reject if no candidate cleared the meaningful-match bar. Caller will
+    // use the saved fallback ratio rather than highlight the wrong spot.
+    if (bestIdx === -1 || bestScore === 0) return null;
+
+    return rangeFromNormalizedOffsets(view, bestIdx, needleN.length);
+  }
+  function rangeFromNormalizedOffsets(view, normIdx, normLen) {
+    const rawStart = view.normToRaw[normIdx];
+    const rawEnd = view.normToRaw[normIdx + normLen] ?? view.total.length;
     const startLoc = locateAt(view.nodes, rawStart);
     const endLoc = locateAt(view.nodes, rawEnd);
     if (!startLoc || !endLoc) return null;
@@ -918,6 +954,18 @@
       range.setEnd(endLoc.node, endLoc.offset);
     } catch { return null; }
     return range;
+  }
+  function commonSuffixLen(a, b) {
+    let i = 0;
+    const min = Math.min(a.length, b.length);
+    while (i < min && a[a.length - 1 - i] === b[b.length - 1 - i]) i++;
+    return i;
+  }
+  function commonPrefixLen(a, b) {
+    let i = 0;
+    const min = Math.min(a.length, b.length);
+    while (i < min && a[i] === b[i]) i++;
+    return i;
   }
   function findElement(anchor) {
     if (!anchor || !anchor.selector) return null;
@@ -1938,6 +1986,13 @@
         kind: 'text', text, context_before: ctx.before, context_after: ctx.after,
         fallback: captureFallbackPosition({ kind: 'text', _range: range }),
       };
+      // Optimistic UI: drop the old anchor's highlight immediately so the
+      // user never sees stale yellow on the previous location while the
+      // PATCH is in flight. refreshComments() will repaint with the new
+      // anchor once the server confirms.
+      state.anchorMarks.delete(id);
+      rebuildSharedHighlights();
+      window.getSelection()?.removeAllRanges();
       fetch('/api/comments', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slug, id, anchor: newAnchor }),
@@ -1945,7 +2000,6 @@
         if (r.status === 401) startDeviceFlow();
         return r.ok ? refreshComments() : null;
       });
-      window.getSelection()?.removeAllRanges();
       return;
     }
     const rect = range.getBoundingClientRect();
@@ -1990,6 +2044,11 @@
     if (!id) return;
     const fallback = fallbackFromExistingAnchor(id);
     exitReanchor();
+    // Optimistic: clear the old highlight before the network call. If the
+    // PATCH fails we'll just re-fetch and the anchor will return — no
+    // worse than the pre-click state.
+    state.anchorMarks.delete(id);
+    rebuildSharedHighlights();
     const r = await fetch('/api/comments', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ slug, id, anchor: { kind: 'none', fallback } }),
