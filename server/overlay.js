@@ -156,6 +156,16 @@
   .tdoc-bar { position: fixed; top: 0; left: 0; right: 0; height: 44px; background: #0a0a0a; color: #fff; display: flex; align-items: center; padding: 0 16px; font: 13px system-ui, sans-serif; z-index: 999999; gap: 12px; }
   .tdoc-bar .title { font-weight: 600; }
   .tdoc-bar .slug { color: #888; }
+  /* Version picker chip + dropdown. Sits between the slug label and the
+     action buttons in the bar. */
+  .tdoc-version-wrap { position: relative; display: inline-block; }
+  .tdoc-version-toggle { background: #1c1c1c; border: 1px solid #333; color: #ddd; padding: 3px 10px; border-radius: 999px; font: 12px ui-monospace, "SF Mono", Menlo, monospace; cursor: pointer; }
+  .tdoc-version-toggle:hover { background: #2a2a2a; color: #fff; }
+  .tdoc-version-menu { display: none; position: absolute; top: calc(100% + 6px); left: 0; background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 1000000; max-height: 60vh; overflow-y: auto; min-width: 120px; }
+  .tdoc-version-menu.open { display: block; }
+  .tdoc-version-menu button { display: block; width: 100%; text-align: left; border: none; background: transparent; color: #ddd; padding: 6px 12px; border-radius: 4px; font: 13px ui-monospace, "SF Mono", Menlo, monospace; cursor: pointer; }
+  .tdoc-version-menu button:hover { background: #1c1c1c; color: #fff; }
+  .tdoc-version-menu button.current { color: #1652f0; }
   .tdoc-bar .spacer { flex: 1; }
   .tdoc-bar button { background: transparent; border: 1px solid #2a2a2a; color: #ddd; padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
   .tdoc-bar button:hover { background: #1c1c1c; color: #fff; border-color: #444; }
@@ -183,7 +193,21 @@
   .tdoc-margin-comment.tdoc-unanchored { border-style: dashed; }
   .tdoc-reanchor-btn { display: none; font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 6px; cursor: pointer; background: none; border: none; padding: 0; text-align: left; }
   .tdoc-margin-comment.tdoc-unanchored .tdoc-reanchor-btn { display: block; }
-  .tdoc-margin-comment.tdoc-unanchored .tdoc-reanchor-btn:hover { color: #1652f0; }
+  /* Anchored cards also expose a "move anchor" action when they're active. */
+  .tdoc-margin-comment.active .tdoc-reanchor-btn { display: block; }
+  .tdoc-reanchor-btn:hover { color: #1652f0; }
+  /* Label swap: "unanchored" wording on unanchored cards, "move anchor" on
+     active anchored cards. */
+  .tdoc-reanchor-btn .tdoc-reanchor-unanchored,
+  .tdoc-reanchor-btn .tdoc-reanchor-anchored { display: none; }
+  .tdoc-margin-comment.tdoc-unanchored .tdoc-reanchor-btn .tdoc-reanchor-unanchored { display: inline; }
+  .tdoc-margin-comment:not(.tdoc-unanchored).active .tdoc-reanchor-btn .tdoc-reanchor-anchored { display: inline; }
+  /* Container for the anchor action buttons. Empty by default; children
+     toggle visibility based on card state. */
+  .tdoc-anchor-actions { display: flex; gap: 12px; align-items: center; margin: 0 0 6px; }
+  .tdoc-unanchor-btn { display: none; font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; background: none; border: none; padding: 0; }
+  .tdoc-margin-comment:not(.tdoc-unanchored).active .tdoc-unanchor-btn { display: block; }
+  .tdoc-unanchor-btn:hover { color: #c33; }
   /* While re-anchor mode is active, dim the rest of the UI and prompt the
      user to select. */
   body.tdoc-reanchoring::before { content: 'Select text to re-anchor this comment, or press Esc to cancel'; position: fixed; top: 56px; left: 50%; transform: translateX(-50%); background: #1652f0; color: #fff; padding: 6px 14px; border-radius: 999px; font: 12px system-ui; z-index: 999999; pointer-events: none; }
@@ -457,9 +481,22 @@
   const bar = document.createElement('div');
   bar.className = 'tdoc-bar';
   // Title differs in fork mode so the user can see what they're looking at.
+  // The version chip is rendered separately so we can wire a dropdown.
   const slugLabel = isFork
-    ? `fork of ${cfg.originalSlug || slug} · v${version}`
-    : `${slug} · v${version}${isPublished ? ' · published' : ''}`;
+    ? `fork of ${cfg.originalSlug || slug}`
+    : `${slug}${isPublished ? ' · published' : ''}`;
+  const versions = Array.isArray(cfg.versions) && cfg.versions.length ? cfg.versions : [{ n: version }];
+  // Pre-sorted asc by version number so the dropdown reads "v1 v2 v3 …".
+  versions.sort((a, b) => (a.n || 0) - (b.n || 0));
+  const versionPickerHtml = `
+    <div class="tdoc-version-wrap">
+      <button class="tdoc-version-toggle" id="tdoc-version-toggle" type="button" aria-haspopup="listbox" aria-expanded="false">v${version}${versions.length > 1 ? ' ▾' : ''}</button>
+      ${versions.length > 1 ? `
+        <div class="tdoc-version-menu" id="tdoc-version-menu" role="listbox">
+          ${versions.map(v => `<button role="option" data-version="${v.n}" class="${v.n === version ? 'current' : ''}">v${v.n}${v.n === version ? ' · current' : ''}</button>`).join('')}
+        </div>
+      ` : ''}
+    </div>`;
   // Publish/Share button: "Publish" in local, "Share" in published, hidden in fork.
   const publishShareBtnHtml = isFork ? '' : (isPublished
     ? `<button id="tdoc-share-btn" class="tdoc-icon-btn" title="Share link" aria-label="Share">
@@ -477,6 +514,7 @@
   bar.innerHTML = `
     <span class="title" id="tdoc-title">tdoc</span>
     <span class="slug">${slugLabel}</span>
+    ${versionPickerHtml}
     <span class="spacer"></span>
     ${publishShareBtnHtml}
     <div class="tdoc-menu-wrap">
@@ -568,6 +606,28 @@
     // since we ARE the fork tab already).
     const sa = document.getElementById('tdoc-saveas-btn');
     if (sa) sa.onclick = () => triggerForkDownload(slug, version);
+  }
+
+  // Version picker — clicking a row navigates to /d/<slug>/v/<n>. The
+  // worker handles version routing; we let the browser do the navigation
+  // instead of any in-page swap so the user can hit Back to return.
+  const versionToggle = document.getElementById('tdoc-version-toggle');
+  const versionMenu = document.getElementById('tdoc-version-menu');
+  if (versionToggle && versionMenu) {
+    versionToggle.onclick = (e) => {
+      e.stopPropagation();
+      const open = versionMenu.classList.toggle('open');
+      versionToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    versionMenu.querySelectorAll('button').forEach(b => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        versionMenu.classList.remove('open');
+        const n = Number(b.dataset.version);
+        if (!Number.isFinite(n) || n === version) return;
+        location.href = `/d/${encodeURIComponent(slug)}/v/${n}`;
+      };
+    });
   }
 
   const copyBtn = document.getElementById('tdoc-copy-md-btn');
@@ -886,7 +946,10 @@
     const replies = Array.isArray(comment.replies) ? comment.replies : [];
     const hasReactions = comment.reactions && Object.values(comment.reactions).some(u => u && u.length > 0);
     card.innerHTML = `
-      ${isFork ? '' : `<button class="tdoc-reanchor-btn" type="button" data-id="${comment.id}">unanchored — click to re-anchor</button>`}
+      ${isFork ? '' : `<div class="tdoc-anchor-actions">
+        <button class="tdoc-reanchor-btn" type="button" data-id="${comment.id}"><span class="tdoc-reanchor-unanchored">unanchored — click to re-anchor</span><span class="tdoc-reanchor-anchored">↻ move anchor</span></button>
+        <button class="tdoc-unanchor-btn" type="button" data-id="${comment.id}" title="Remove anchor — comment stays in the thread but no longer points at any text">× remove anchor</button>
+      </div>`}
       ${renderAuthor(comment.author)}
       <div class="text">${escapeHtml(comment.text)}</div>
       ${hasReactions ? renderReactionsRow(comment) : ''}
@@ -931,6 +994,20 @@
 
     const reBtn = card.querySelector('.tdoc-reanchor-btn');
     if (reBtn) reBtn.onclick = (e) => { e.stopPropagation(); startReanchor(comment.id); };
+
+    const unBtn = card.querySelector('.tdoc-unanchor-btn');
+    if (unBtn) unBtn.onclick = async (e) => {
+      e.stopPropagation();
+      // PATCH the comment with a "deliberately unanchored" anchor — kind:none.
+      // The same anchor-stale logic on the worker clears the agent verdict.
+      const r = await fetch('/api/comments', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug, id: comment.id, anchor: { kind: 'none' } }),
+      });
+      if (r.status === 401) { startDeviceFlow(); return; }
+      if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Could not unanchor: ' + (err.error || `HTTP ${r.status}`)); return; }
+      await refreshComments();
+    };
 
     card.querySelectorAll('.del').forEach(del => {
       del.onclick = async (e) => {
@@ -1922,6 +1999,12 @@
     // Close menus that aren't under the cursor
     if (!t.closest('#tdoc-more-btn') && !t.closest('#tdoc-secondary-menu')) secMenu.classList.remove('open');
     if (!t.closest('.tdoc-menu-wrap')) copyMenu.classList.remove('open');
+    if (!t.closest('.tdoc-version-wrap')) {
+      const vm = document.getElementById('tdoc-version-menu');
+      const vt = document.getElementById('tdoc-version-toggle');
+      if (vm) vm.classList.remove('open');
+      if (vt) vt.setAttribute('aria-expanded', 'false');
+    }
     if (!t.closest('.tdoc-emoji-picker') && !t.closest('.tdoc-react-add')) closeEmojiPicker();
 
     // Close drawer on outside click (narrow only)

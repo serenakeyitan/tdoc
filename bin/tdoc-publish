@@ -250,7 +250,7 @@ if [ "${TDOC_SKIP_WORKER_DEPLOY:-0}" != "1" ]; then
   fi
 fi
 
-# --- upload latest version of slug ---
+# --- upload doc versions ---
 META_FILE="$DOC_DIR/meta.json"
 if [ ! -f "$META_FILE" ]; then
   echo "no meta.json at $META_FILE" >&2
@@ -264,20 +264,43 @@ if [ ! -f "$HTML_FILE" ]; then
   exit 1
 fi
 
-echo "[tdoc] uploading $SLUG v$VERSION to $UPLOAD_BASE ..."
-PAYLOAD="$(jq -n \
-  --arg slug "$SLUG" \
-  --argjson version "$VERSION" \
-  --rawfile html "$HTML_FILE" \
-  --slurpfile meta "$META_FILE" \
-  '{slug:$slug, version:$version, html:$html, meta: $meta[0]}')"
+# Upload one specific version's HTML. Called once per version below.
+upload_version() {
+  local v="$1"
+  local html_path="$DOC_DIR/v${v}/index.html"
+  [ -f "$html_path" ] || { echo "  (v$v missing — skipping)"; return; }
+  local payload
+  payload="$(jq -n \
+    --arg slug "$SLUG" \
+    --argjson version "$v" \
+    --rawfile html "$html_path" \
+    --slurpfile meta "$META_FILE" \
+    '{slug:$slug, version:$version, html:$html, meta: $meta[0]}')"
+  local resp
+  resp="$(curl -sS -X POST "$UPLOAD_BASE/api/upload" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary "$payload")"
+  local ok
+  ok="$(echo "$resp" | jq -r '.ok // false')"
+  if [ "$ok" = "true" ]; then
+    echo "[tdoc] v$v uploaded ($(echo "$resp" | jq -r '.size // "?"') bytes)"
+  else
+    echo "[tdoc] v$v upload FAILED: $resp" >&2
+    return 1
+  fi
+}
 
-RESP="$(curl -sS -X POST "$UPLOAD_BASE/api/upload" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary "$PAYLOAD")"
-
-echo "$RESP" | jq .
+# Upload every local version that isn't yet on the worker. The version
+# picker in the doc UI needs older versions to be reachable too — we don't
+# rely on past publishes having uploaded them. Latest goes last so the
+# meta KV ends up pointing at the actual newest version.
+LOCAL_VERSIONS="$(jq -r '.versions | sort_by(.n) | .[].n' "$META_FILE")"
+echo "[tdoc] uploading $SLUG versions: $(echo "$LOCAL_VERSIONS" | tr '\n' ' ')"
+for v in $LOCAL_VERSIONS; do
+  if [ "$v" != "$VERSION" ]; then upload_version "$v"; fi
+done
+upload_version "$VERSION"
 echo
 echo "Published: $PUBLIC_BASE/d/$SLUG/v/$VERSION"
 if [ -n "$CUSTOM_DOMAIN" ] && [ "$PUBLIC_HOST" = "$CUSTOM_DOMAIN" ]; then

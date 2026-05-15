@@ -63,8 +63,18 @@ function safeJsonForScript(obj) {
 
 function injectOverlay(html, slug, version) {
   const overlay = fs.readFileSync(OVERLAY_PATH, 'utf8');
+  // Hand the overlay the full version list so the bar can offer a version
+  // picker. Read straight from meta.json; ignore failures and fall back to
+  // the current version only.
+  let versions = [{ n: version }];
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(ROOT, slug, 'meta.json'), 'utf8'));
+    if (Array.isArray(meta.versions) && meta.versions.length) {
+      versions = meta.versions.map(v => ({ n: v.n, created: v.created || null }));
+    }
+  } catch {}
   const cfg = `<script>window.__TDOC__ = ${safeJsonForScript({
-    slug, version, identity: null, authConfigured: false, mode: 'local'
+    slug, version, identity: null, authConfigured: false, mode: 'local', versions,
   })};</script>`;
   const inject = `${cfg}\n<script>${overlay}</script>`;
   if (html.includes('</body>')) return html.replace('</body>', `${inject}\n</body>`);

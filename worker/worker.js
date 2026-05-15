@@ -67,12 +67,13 @@ function safeJsonForScript(obj) {
   return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
 }
 
-function injectOverlay(rawHtml, slug, version, identity) {
+function injectOverlay(rawHtml, slug, version, identity, versions) {
   const cfg = {
     slug, version,
     identity: identity || null,
     authConfigured: true,
     mode: 'published',
+    versions: Array.isArray(versions) && versions.length ? versions : [{ n: version }],
   };
   const inject =
     `<script>window.__TDOC__ = ${safeJsonForScript(cfg)};</script>\n` +
@@ -217,7 +218,17 @@ export default {
       const raw = await obj.text();
       const session = await getSession(env, req);
       const identity = session ? { login: session.login, avatar_url: session.avatar_url, name: session.name } : null;
-      return html(injectOverlay(raw, slug, Number(vStr), identity));
+      // Pull the full versions array from meta so the bar can render a
+      // version picker. Falls back to single-version if meta is missing.
+      let versions = null;
+      try {
+        const metaRaw = await env.META.get(`meta:${slug}`);
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw);
+          if (Array.isArray(meta.versions)) versions = meta.versions.map(v => ({ n: v.n, created: v.created || null }));
+        }
+      } catch {}
+      return html(injectOverlay(raw, slug, Number(vStr), identity, versions));
     }
 
     // ---- doc export / fork ----
