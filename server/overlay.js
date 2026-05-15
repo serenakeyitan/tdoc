@@ -152,38 +152,63 @@
   /* Pre/code blocks scroll horizontally instead of breaking the layout. */
   :where(body pre) { max-width: 100%; overflow-x: auto; }
 
-  /* Top bar */
-  .tdoc-bar { position: fixed; top: 0; left: 0; right: 0; height: 44px; background: #0a0a0a; color: #fff; display: flex; align-items: center; padding: 0 16px; font: 13px system-ui, sans-serif; z-index: 999999; gap: 12px; }
-  .tdoc-bar .title { font-weight: 600; }
-  .tdoc-bar .slug { color: #888; }
-  /* Version picker chip + dropdown. Sits between the slug label and the
-     action buttons in the bar. */
-  .tdoc-version-wrap { position: relative; display: inline-block; }
-  .tdoc-version-toggle { background: #1c1c1c; border: 1px solid #333; color: #ddd; padding: 3px 10px; border-radius: 999px; font: 12px ui-monospace, "SF Mono", Menlo, monospace; cursor: pointer; }
-  .tdoc-version-toggle:hover { background: #2a2a2a; color: #fff; }
-  .tdoc-version-menu { display: none; position: absolute; top: calc(100% + 6px); left: 0; background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 1000000; max-height: 60vh; overflow-y: auto; min-width: 120px; }
-  .tdoc-version-menu.open { display: block; }
-  .tdoc-version-menu button { display: block; width: 100%; text-align: left; border: none; background: transparent; color: #ddd; padding: 6px 12px; border-radius: 4px; font: 13px ui-monospace, "SF Mono", Menlo, monospace; cursor: pointer; }
-  .tdoc-version-menu button:hover { background: #1c1c1c; color: #fff; }
-  .tdoc-version-menu button.current { color: #1652f0; }
-  .tdoc-bar .spacer { flex: 1; }
-  .tdoc-bar button { background: transparent; border: 1px solid #2a2a2a; color: #ddd; padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
-  .tdoc-bar button:hover { background: #1c1c1c; color: #fff; border-color: #444; }
-  .tdoc-icon-btn { display: inline-flex; align-items: center; gap: 6px; }
-  .tdoc-menu-wrap { position: relative; display: inline-block; }
-  .tdoc-menu,.tdoc-secondary-menu { position: absolute; background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000000; }
+  /* ========== Top bar (HackMD-inspired rhythm) ==========
+     Three groups: left breadcrumb (workspace + slug + version), center
+     doc title (truncates), right cluster (identity, primary CTA, more).
+     No borders on individual buttons — uses hover background instead, so
+     the bar reads as a clean strip rather than a row of chiclets.
+     Light theme to match the doc body. */
+  .tdoc-bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; background: #fff; color: #1a1a1a; display: flex; align-items: center; padding: 0 12px; font: 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; z-index: 999999; gap: 8px; border-bottom: 1px solid #e5e5e7; box-shadow: 0 1px 2px rgba(0,0,0,0.02); }
+  .tdoc-bar-left { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; }
+  .tdoc-bar-center { flex: 1 1 auto; display: flex; justify-content: center; min-width: 0; padding: 0 8px; }
+  .tdoc-bar-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+  /* Workspace mark — circular dot like HackMD's logo. Clicks → /. */
+  .tdoc-bar-mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #1652f0; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; flex-shrink: 0; border: none; }
+  .tdoc-bar-mark:hover { background: #1245d0; }
+
+  /* Breadcrumb: workspace · slug · v3 — separated by " / ". */
+  .tdoc-bar .crumb { color: #555; font-weight: 500; padding: 4px 6px; border-radius: 6px; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tdoc-bar .crumb-sep { color: #c0c0c4; user-select: none; padding: 0 1px; }
+  .tdoc-bar .doc-title { color: #1a1a1a; font-weight: 600; font-size: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Default action button — icon and/or label, no border, hover bg only. */
+  .tdoc-bar button { background: transparent; border: none; color: #555; padding: 6px 8px; border-radius: 6px; font: inherit; cursor: pointer; transition: background .12s, color .12s; display: inline-flex; align-items: center; gap: 6px; }
+  .tdoc-bar button:hover { background: #f0f1f4; color: #1a1a1a; }
+  .tdoc-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .tdoc-bar button svg { flex-shrink: 0; }
+
+  /* Primary CTA (Share / Publish) — filled blue button at the right. */
+  .tdoc-bar button.primary { background: #1652f0; color: #fff; padding: 7px 14px; font-weight: 600; }
+  .tdoc-bar button.primary:hover { background: #1245d0; color: #fff; }
+
+  /* Version picker chip — pill in the left breadcrumb. */
+  .tdoc-version-wrap { position: relative; display: inline-block; flex-shrink: 0; }
+  .tdoc-version-toggle { background: #f0f1f4 !important; color: #1a1a1a !important; padding: 3px 10px !important; border-radius: 999px !important; font: 12px ui-monospace, "SF Mono", Menlo, monospace !important; }
+  .tdoc-version-toggle:hover { background: #e5e6ea !important; }
+
+  /* Dropdown menus — light surface to match the bar. */
+  .tdoc-menu, .tdoc-secondary-menu, .tdoc-version-menu { display: none; position: absolute; background: #fff; border: 1px solid #e5e5e7; border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); z-index: 1000000; min-width: 160px; }
+  .tdoc-version-menu { top: calc(100% + 6px); left: 0; max-height: 60vh; overflow-y: auto; }
   .tdoc-menu { top: calc(100% + 6px); right: 0; min-width: 180px; }
-  .tdoc-secondary-menu { top: 100%; right: 10px; min-width: 160px; }
-  .tdoc-menu.open,.tdoc-secondary-menu.open { display: block; }
-  .tdoc-menu button,.tdoc-secondary-menu button { display: block; width: 100%; text-align: left; border: none; background: transparent; color: #ddd; padding: 8px 12px; border-radius: 4px; font: 13px system-ui, sans-serif; cursor: pointer; }
-  .tdoc-menu button:hover,.tdoc-secondary-menu button:hover { background: #1c1c1c; color: #fff; }
-  .tdoc-bar .tdoc-secondary-toggle { display: none; background: transparent; border: 1px solid #2a2a2a; color: #ddd; padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer; align-items: center; }
-  .tdoc-bar .tdoc-secondary-toggle:hover { background: #1c1c1c; }
-  .tdoc-chip { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 3px; background: #1c1c1c; border: 1px solid #333; border-radius: 999px; cursor: pointer; color: #fff; font: inherit; }
-  .tdoc-chip:hover { background: #2a2a2a; }
-  .tdoc-chip img { width: 28px; height: 28px; border-radius: 50%; }
-  .tdoc-chip .name { font-size: 13px; }
-  .tdoc-chip.signin { padding: 6px 14px; background: #1652f0; border-color: #1652f0; }
+  .tdoc-secondary-menu { top: calc(100% + 6px); right: 0; }
+  .tdoc-menu.open, .tdoc-secondary-menu.open, .tdoc-version-menu.open { display: block; }
+  .tdoc-menu button, .tdoc-secondary-menu button, .tdoc-version-menu button { display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: 4px; color: #1a1a1a; font: 13px system-ui, sans-serif; }
+  .tdoc-version-menu button { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .tdoc-menu button:hover, .tdoc-secondary-menu button:hover, .tdoc-version-menu button:hover { background: #f0f1f4; }
+  .tdoc-version-menu button.current { color: #1652f0; font-weight: 600; }
+
+  .tdoc-menu-wrap { position: relative; display: inline-block; }
+  /* Overflow ⋯ button shows on narrow viewports. */
+  .tdoc-bar .tdoc-secondary-toggle { display: none; padding: 6px 10px; }
+
+  /* Identity chip — avatar + name (name hides on narrow). */
+  .tdoc-chip { display: inline-flex; align-items: center; gap: 8px; padding: 3px 12px 3px 3px; background: #f0f1f4; border-radius: 999px; cursor: pointer; color: #1a1a1a; font: inherit; border: none; }
+  .tdoc-chip:hover { background: #e5e6ea; }
+  .tdoc-chip img { width: 26px; height: 26px; border-radius: 50%; }
+  .tdoc-chip .name { font-size: 13px; font-weight: 500; }
+  .tdoc-chip.signin { padding: 7px 14px; background: #1652f0; color: #fff; font-weight: 600; }
+  .tdoc-chip.signin:hover { background: #1245d0; }
   .tdoc-chip.signin:hover { background: #1245d0; }
 
   /* Comment cards */
@@ -387,20 +412,28 @@
   .tdoc-modal .danger { color: #c33; font-size: 13px; }
   .tdoc-modal code { background: #f5f6f8; padding: 1px 5px; border-radius: 3px; }
 
-  /* Top bar collapse — tied to the *viewport* width, not the layout class.
-     The previous rule hung off body.tdoc-narrow, which depends on article-
-     width measurements that flicker as comments load (toggling
-     tdoc-has-comments → padding-right → article shrinks → re-evaluates →
-     class flips). Pin the bar layout to a media query so it stays stable
-     regardless of comment state. */
+  /* Bar collapse breakpoints — tied to viewport width, not layout class.
+     The bar progressively hides elements as the viewport tightens, so it
+     stays elegant at every size.
+       ≥1100px: workspace · slug · v · | title | identity · share · ⋯
+       <1100px: workspace ·          v · | title | identity · share · ⋯  (slug hides)
+       < 900px: workspace ·          v · | title | avatar   · share · ⋯  (name hides)
+       < 700px: workspace             · | title |            share · ⋯  (version+identity into ⋯) */
+  @media (max-width: 1100px) {
+    .tdoc-bar .crumb-slug, .tdoc-bar .crumb-sep-slug { display: none; }
+  }
   @media (max-width: 900px) {
-    .tdoc-bar .slug, .tdoc-bar #tdoc-fork-btn, .tdoc-bar #tdoc-home-btn, .tdoc-bar #tdoc-publish-btn, .tdoc-bar #tdoc-share-btn, .tdoc-bar #tdoc-saveas-btn { display: none; }
-    .tdoc-bar .tdoc-secondary-toggle { display: inline-flex; }
-    .tdoc-bar .title { font-size: 13px; max-width: 50vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tdoc-chip .name { display: none; }
     .tdoc-chip { padding: 3px; }
-    .tdoc-chip.signin { padding: 6px 10px; font-size: 12px; }
-    .tdoc-chip.signin .name { display: inline; }
+    .tdoc-bar #tdoc-fork-btn, .tdoc-bar #tdoc-saveas-btn { display: none; }
+    .tdoc-bar .tdoc-secondary-toggle { display: inline-flex; }
+  }
+  @media (max-width: 700px) {
+    .tdoc-bar { padding: 0 8px; gap: 4px; }
+    .tdoc-version-wrap { display: none; }
+    .tdoc-bar .doc-title { font-size: 13px; }
+    .tdoc-bar #tdoc-copy-md-btn span { display: none; }
+    .tdoc-bar #tdoc-publish-btn span, .tdoc-bar #tdoc-share-btn span { display: inline; }
   }
 
   /* Narrow mode (drawer + FAB) — still driven by the layout evaluator so
@@ -477,18 +510,19 @@
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  // ========== Top bar ==========
+  // ========== Top bar (HackMD-style three-group layout) ==========
   const bar = document.createElement('div');
   bar.className = 'tdoc-bar';
-  // Title differs in fork mode so the user can see what they're looking at.
-  // The version chip is rendered separately so we can wire a dropdown.
-  const slugLabel = isFork
-    ? `fork of ${cfg.originalSlug || slug}`
-    : `${slug}${isPublished ? ' · published' : ''}`;
+
   const versions = Array.isArray(cfg.versions) && cfg.versions.length ? cfg.versions : [{ n: version }];
-  // Pre-sorted asc by version number so the dropdown reads "v1 v2 v3 …".
   versions.sort((a, b) => (a.n || 0) - (b.n || 0));
-  const versionPickerHtml = `
+  const slugCrumbLabel = isFork ? `fork of ${cfg.originalSlug || slug}` : slug;
+
+  // Left group: workspace mark + slug crumb + version picker.
+  const leftHtml = `
+    <button class="tdoc-bar-mark" id="tdoc-bar-mark" title="All docs" aria-label="All docs">t</button>
+    <span class="crumb crumb-slug" title="${escapeHtml(slugCrumbLabel)}">${escapeHtml(slugCrumbLabel)}</span>
+    <span class="crumb-sep crumb-sep-slug" aria-hidden="true">/</span>
     <div class="tdoc-version-wrap">
       <button class="tdoc-version-toggle" id="tdoc-version-toggle" type="button" aria-haspopup="listbox" aria-expanded="false">v${version}${versions.length > 1 ? ' ▾' : ''}</button>
       ${versions.length > 1 ? `
@@ -497,28 +531,14 @@
         </div>
       ` : ''}
     </div>`;
-  // Publish/Share button: "Publish" in local, "Share" in published, hidden in fork.
-  const publishShareBtnHtml = isFork ? '' : (isPublished
-    ? `<button id="tdoc-share-btn" class="tdoc-icon-btn" title="Share link" aria-label="Share">
-         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-         <span>Share</span>
-       </button>`
-    : `<button id="tdoc-publish-btn" class="tdoc-icon-btn" title="Publish to your Worker" aria-label="Publish">
-         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg>
-         <span>Publish</span>
-       </button>`);
-  // Fork button: shown only on published docs. Fork mode shows "Save copy" instead.
-  const forkBtnHtml = isPublished
-    ? '<button id="tdoc-fork-btn">Fork</button>'
-    : (isFork ? '<button id="tdoc-saveas-btn">Save As New Local Doc</button>' : '');
-  bar.innerHTML = `
-    <span class="title" id="tdoc-title">tdoc</span>
-    <span class="slug">${slugLabel}</span>
-    ${versionPickerHtml}
-    <span class="spacer"></span>
-    ${publishShareBtnHtml}
+
+  // Center: doc title (pulled from <title>). Hidden on very narrow.
+  const centerHtml = `<span class="doc-title" id="tdoc-title">tdoc</span>`;
+
+  // Right: copy menu + primary CTA (Share or Publish) + ⋯ overflow + identity.
+  const copyMenuHtml = `
     <div class="tdoc-menu-wrap">
-      <button id="tdoc-copy-md-btn" class="tdoc-icon-btn" title="Copy as Markdown" aria-label="Copy as Markdown">
+      <button id="tdoc-copy-md-btn" title="Copy as Markdown" aria-label="Copy as Markdown">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         <span>Copy</span>
       </button>
@@ -526,25 +546,50 @@
         <button data-mode="doc">Doc only</button>
         <button data-mode="doc-comments">Doc + comments</button>
       </div>
-    </div>
+    </div>`;
+
+  const primaryCtaHtml = isFork ? '' : (isPublished
+    ? `<button id="tdoc-share-btn" class="primary" title="Share link" aria-label="Share">
+         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+         <span>Share</span>
+       </button>`
+    : `<button id="tdoc-publish-btn" class="primary" title="Publish to your Worker" aria-label="Publish">
+         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg>
+         <span>Publish</span>
+       </button>`);
+
+  // Fork / Save-as live in the ⋯ menu on narrow viewports.
+  const forkBtnHtml = isPublished
+    ? '<button id="tdoc-fork-btn">Fork</button>'
+    : (isFork ? '<button id="tdoc-saveas-btn">Save As New Local Doc</button>' : '');
+
+  const rightHtml = `
+    ${copyMenuHtml}
     ${forkBtnHtml}
-    <button id="tdoc-home-btn">All docs</button>
-    <button class="tdoc-secondary-toggle" id="tdoc-more-btn" aria-label="More" title="More">⋯</button>
-    <span id="tdoc-identity-slot"></span>
-    <div class="tdoc-secondary-menu" id="tdoc-secondary-menu">
-      ${isPublished ? '<button data-action="share">Share</button><button data-action="fork">Fork</button>' : ''}
-      ${isLocal ? '<button data-action="publish">Publish</button>' : ''}
-      ${isFork ? '<button data-action="saveas">Save copy</button>' : ''}
-      <button data-action="home">All docs</button>
+    ${primaryCtaHtml}
+    <div class="tdoc-menu-wrap">
+      <button class="tdoc-secondary-toggle" id="tdoc-more-btn" aria-label="More" title="More">⋯</button>
+      <div class="tdoc-secondary-menu" id="tdoc-secondary-menu">
+        ${isPublished ? '<button data-action="share">Share</button><button data-action="fork">Fork</button>' : ''}
+        ${isLocal ? '<button data-action="publish">Publish</button>' : ''}
+        ${isFork ? '<button data-action="saveas">Save copy</button>' : ''}
+        <button data-action="home">All docs</button>
+      </div>
     </div>
+    <span id="tdoc-identity-slot"></span>`;
+
+  bar.innerHTML = `
+    <div class="tdoc-bar-left">${leftHtml}</div>
+    <div class="tdoc-bar-center">${centerHtml}</div>
+    <div class="tdoc-bar-right">${rightHtml}</div>
   `;
   document.body.appendChild(bar);
-
 
   const titleEl = document.querySelector('title');
   if (titleEl && titleEl.textContent) document.getElementById('tdoc-title').textContent = titleEl.textContent;
 
-  document.getElementById('tdoc-home-btn').onclick = () => location.href = '/';
+  // Workspace mark in the bar's left → "all docs" home.
+  document.getElementById('tdoc-bar-mark').onclick = () => location.href = '/';
 
   // Fork: opens the renderable /fork view in a new tab AND triggers a download
   // (one click, both happen). We use a hidden iframe to fire the download so
