@@ -227,15 +227,19 @@
   .tdoc-reanchor-btn .tdoc-reanchor-anchored { display: none; }
   .tdoc-margin-comment.tdoc-unanchored .tdoc-reanchor-btn .tdoc-reanchor-unanchored { display: inline; }
   .tdoc-margin-comment:not(.tdoc-unanchored).active .tdoc-reanchor-btn .tdoc-reanchor-anchored { display: inline; }
-  /* Container for the anchor action buttons. Empty by default; children
-     toggle visibility based on card state. */
+  /* Container for the anchor action buttons. */
   .tdoc-anchor-actions { display: flex; gap: 12px; align-items: center; margin: 0 0 6px; }
-  .tdoc-unanchor-btn { display: none; font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; background: none; border: none; padding: 0; }
-  .tdoc-margin-comment:not(.tdoc-unanchored).active .tdoc-unanchor-btn { display: block; }
-  .tdoc-unanchor-btn:hover { color: #c33; }
   /* While re-anchor mode is active, dim the rest of the UI and prompt the
      user to select. */
-  body.tdoc-reanchoring::before { content: 'Select text to re-anchor this comment, or press Esc to cancel'; position: fixed; top: 56px; left: 50%; transform: translateX(-50%); background: #1652f0; color: #fff; padding: 6px 14px; border-radius: 999px; font: 12px system-ui; z-index: 999999; pointer-events: none; }
+  /* Re-anchor banner: pinned below the bar with three actions. Visible
+     only while body.tdoc-reanchoring is set. */
+  .tdoc-reanchor-banner { display: none; position: fixed; top: 56px; left: 50%; transform: translateX(-50%); background: #1652f0; color: #fff; padding: 6px 10px 6px 14px; border-radius: 999px; font: 12px system-ui; z-index: 999999; align-items: center; gap: 6px; box-shadow: 0 4px 16px rgba(22,82,240,0.35); }
+  body.tdoc-reanchoring .tdoc-reanchor-banner { display: inline-flex; }
+  .tdoc-reanchor-banner .label { padding: 0 4px; }
+  .tdoc-reanchor-banner button { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 4px 10px; border-radius: 999px; font: 12px system-ui; cursor: pointer; }
+  .tdoc-reanchor-banner button:hover { background: rgba(255,255,255,0.28); }
+  .tdoc-reanchor-banner button.danger { background: rgba(255,255,255,0.15); }
+  .tdoc-reanchor-banner button.danger:hover { background: #c33; }
   /* Ghost marker — a faint horizontal line at the unanchored comment's
      original Y position, so the user can see where the deleted text used
      to be. Stays in document coordinates. */
@@ -584,6 +588,18 @@
     <div class="tdoc-bar-right">${rightHtml}</div>
   `;
   document.body.appendChild(bar);
+
+  // Re-anchor banner — shown while a re-anchor action is in flight. Three
+  // explicit actions to avoid the gesture conflict (clicking empty space
+  // would otherwise be ambiguous with "deselect").
+  const reanchorBanner = document.createElement('div');
+  reanchorBanner.className = 'tdoc-reanchor-banner';
+  reanchorBanner.innerHTML = `
+    <span class="label">Select text to move anchor</span>
+    <button type="button" id="tdoc-reanchor-remove">Remove anchor</button>
+    <button type="button" id="tdoc-reanchor-cancel" class="danger">Cancel</button>
+  `;
+  document.body.appendChild(reanchorBanner);
 
   const titleEl = document.querySelector('title');
   if (titleEl && titleEl.textContent) document.getElementById('tdoc-title').textContent = titleEl.textContent;
@@ -993,7 +1009,6 @@
     card.innerHTML = `
       ${isFork ? '' : `<div class="tdoc-anchor-actions">
         <button class="tdoc-reanchor-btn" type="button" data-id="${comment.id}"><span class="tdoc-reanchor-unanchored">unanchored — click to re-anchor</span><span class="tdoc-reanchor-anchored">↻ move anchor</span></button>
-        <button class="tdoc-unanchor-btn" type="button" data-id="${comment.id}" title="Remove anchor — comment stays in the thread but no longer points at any text">× remove anchor</button>
       </div>`}
       ${renderAuthor(comment.author)}
       <div class="text">${escapeHtml(comment.text)}</div>
@@ -1039,20 +1054,6 @@
 
     const reBtn = card.querySelector('.tdoc-reanchor-btn');
     if (reBtn) reBtn.onclick = (e) => { e.stopPropagation(); startReanchor(comment.id); };
-
-    const unBtn = card.querySelector('.tdoc-unanchor-btn');
-    if (unBtn) unBtn.onclick = async (e) => {
-      e.stopPropagation();
-      // PATCH the comment with a "deliberately unanchored" anchor — kind:none.
-      // The same anchor-stale logic on the worker clears the agent verdict.
-      const r = await fetch('/api/comments', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug, id: comment.id, anchor: { kind: 'none' } }),
-      });
-      if (r.status === 401) { startDeviceFlow(); return; }
-      if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Could not unanchor: ' + (err.error || `HTTP ${r.status}`)); return; }
-      await refreshComments();
-    };
 
     card.querySelectorAll('.del').forEach(del => {
       del.onclick = async (e) => {
@@ -1241,36 +1242,53 @@
       prevBottom = y + row.card.offsetHeight;
     }
 
-    // Unanchored cards: place them near where the anchor USED to be (using
-    // the fallback position captured at create time). Falls back to a
-    // post-anchored-stack location only if no fallback was saved.
+    // Unanchored cards: each lands at its own fallback Y, **independent of
+    // other cards**. Earlier (lower-Y) cards anchor first; later ones nudge
+    // down only if they would directly overlap the previous one. Adding or
+    // removing a single unanchored comment must not cascade and shift every
+    // card below it — that was the bug the user reported.
+    //
+    // Cards without a saved fallback (created before fallback was a feature)
+    // get parked at the bottom in their existing document order.
     const articleEl = metrics.el || document.body;
     const articleTop = articleEl.getBoundingClientRect().top + window.scrollY;
     const articleHeight = Math.max(1, articleEl.scrollHeight);
-    const unanchored = state.activeComments
+    const unanchoredAll = state.activeComments
       .map(c => ({ c, card: state.cardEls.get(c.id) }))
-      .filter(x => x.card && !state.anchorMarks.get(x.c.id))
-      .map(x => {
-        const fb = x.c.anchor?.fallback;
-        let y;
-        if (fb && typeof fb.ratio === 'number') {
-          y = articleTop + fb.ratio * articleHeight;
-        } else {
-          y = prevBottom + 32;
-        }
-        return { ...x, y };
-      })
+      .filter(x => x.card && !state.anchorMarks.get(x.c.id));
+    const withFb = unanchoredAll
+      .filter(x => x.c.anchor?.fallback && typeof x.c.anchor.fallback.ratio === 'number')
+      .map(x => ({ ...x, y: articleTop + x.c.anchor.fallback.ratio * articleHeight }))
       .sort((a, b) => a.y - b.y);
-    for (const { card, c, y: wantY } of unanchored) {
+    // Sort legacy-no-fallback cards by id (which encodes creation timestamp)
+    // so the tail order is stable across re-renders. Adding/removing a newer
+    // card never shifts older ones.
+    const withoutFb = unanchoredAll
+      .filter(x => !(x.c.anchor?.fallback && typeof x.c.anchor.fallback.ratio === 'number'))
+      .sort((a, b) => (a.c.id || '').localeCompare(b.c.id || ''));
+
+    // Fallback-positioned: lay out at their own Y, only nudging down if the
+    // immediately-previous card in the SAME group would overlap.
+    let lastBottom = 0;
+    for (const { card, c, y: wantY } of withFb) {
       let y = wantY;
-      if (y < prevBottom + margin) y = prevBottom + margin;
+      if (y < lastBottom + margin) y = lastBottom + margin;
       card.style.top = y + 'px';
       card.style.left = cardLeft + 'px';
       card.classList.add('tdoc-unanchored');
-      // Optional ghost marker — a faint dashed line at the original Y so the
-      // user can see where the deleted text used to be.
-      if (c.anchor?.fallback) renderGhostMarker(c.id, articleTop + c.anchor.fallback.ratio * articleHeight);
-      prevBottom = y + card.offsetHeight;
+      renderGhostMarker(c.id, articleTop + c.anchor.fallback.ratio * articleHeight);
+      lastBottom = y + card.offsetHeight;
+    }
+    // Legacy cards without fallback go below the article, in a stable order
+    // (sorted by id above). Y is anchored to articleBottom — not to any other
+    // card — so adding/removing anywhere else doesn't ripple here.
+    const articleBottom = articleTop + articleHeight;
+    let tailY = articleBottom + 32;
+    for (const { card } of withoutFb) {
+      card.style.top = tailY + 'px';
+      card.style.left = cardLeft + 'px';
+      card.classList.add('tdoc-unanchored');
+      tailY += card.offsetHeight + margin;
     }
   }
 
@@ -1451,10 +1469,7 @@
   window.addEventListener('resize', () => requestAnimationFrame(() => { evaluateLayout(); repositionCards(); }));
   // Esc cancels re-anchor mode globally.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && state.reanchoringId) {
-      state.reanchoringId = null;
-      document.body.classList.remove('tdoc-reanchoring');
-    }
+    if (e.key === 'Escape' && state.reanchoringId) exitReanchor();
   });
   window.addEventListener('scroll', () => requestAnimationFrame(repositionCards), { passive: true });
   if (window.ResizeObserver) new ResizeObserver(() => repositionCards()).observe(document.body);
@@ -1918,8 +1933,7 @@
     // too so the comment "moves" to where the user just selected.
     if (state.reanchoringId) {
       const id = state.reanchoringId;
-      state.reanchoringId = null;
-      document.body.classList.remove('tdoc-reanchoring');
+      exitReanchor();
       const newAnchor = {
         kind: 'text', text, context_before: ctx.before, context_after: ctx.after,
         fallback: captureFallbackPosition({ kind: 'text', _range: range }),
@@ -1941,14 +1955,49 @@
   // Begin the re-anchor flow: future text selection on the doc will rebind
   // this comment instead of creating a new one. Toggle off if clicked again.
   function startReanchor(id) {
-    if (state.reanchoringId === id) {
-      state.reanchoringId = null;
-      document.body.classList.remove('tdoc-reanchoring');
-      return;
-    }
+    if (state.reanchoringId === id) { exitReanchor(); return; }
     state.reanchoringId = id;
     document.body.classList.add('tdoc-reanchoring');
   }
+  function exitReanchor() {
+    state.reanchoringId = null;
+    document.body.classList.remove('tdoc-reanchoring');
+  }
+  // Capture a fallback position for an existing comment by reading the
+  // current anchor's location, so an unanchored card stays where it was.
+  function fallbackFromExistingAnchor(commentId) {
+    const mark = state.anchorMarks.get(commentId);
+    if (!mark) return null;
+    const metrics = getArticleMetrics();
+    const articleEl = metrics.el || document.body;
+    const articleTop = articleEl.getBoundingClientRect().top + window.scrollY;
+    const articleHeight = Math.max(1, articleEl.scrollHeight);
+    let rect = null;
+    if (mark.ranges?.[0]) rect = mark.ranges[0].getBoundingClientRect();
+    else if (mark.el) rect = mark.el.getBoundingClientRect();
+    else if (mark.targetEl) rect = mark.targetEl.getBoundingClientRect();
+    if (!rect) return null;
+    const centerY = rect.top + rect.height / 2 + window.scrollY;
+    return { ratio: Math.max(0, Math.min(1, (centerY - articleTop) / articleHeight)), nearestHeading: null };
+  }
+  // Wire banner buttons (created once near the bar). The banner is the
+  // only place we expose "remove anchor" — keeps cards uncluttered and
+  // resolves the gesture conflict you'd hit with "click empty space".
+  document.getElementById('tdoc-reanchor-cancel').onclick = (e) => { e.stopPropagation(); exitReanchor(); };
+  document.getElementById('tdoc-reanchor-remove').onclick = async (e) => {
+    e.stopPropagation();
+    const id = state.reanchoringId;
+    if (!id) return;
+    const fallback = fallbackFromExistingAnchor(id);
+    exitReanchor();
+    const r = await fetch('/api/comments', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug, id, anchor: { kind: 'none', fallback } }),
+    });
+    if (r.status === 401) { startDeviceFlow(); return; }
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Could not remove anchor: ' + (err.error || `HTTP ${r.status}`)); return; }
+    await refreshComments();
+  };
 
   // ========== Hover affordance ==========
   // ========== Artifact hover affordance ==========
