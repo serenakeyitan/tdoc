@@ -1266,72 +1266,65 @@
     const maxLeft = window.scrollX + window.innerWidth - cardWidth - 12;
     if (cardLeft > maxLeft) cardLeft = maxLeft;
 
-    const anchored = state.activeComments
-      .map(c => ({ c, mark: state.anchorMarks.get(c.id), card: state.cardEls.get(c.id) }))
-      .filter(x => x.mark && x.card && (x.mark.ranges?.[0] || x.mark.el))
-      .map(x => {
-        let top;
-        if (x.mark.ranges?.[0]) top = x.mark.ranges[0].getBoundingClientRect().top;
-        else top = x.mark.el.getBoundingClientRect().top;
-        return { ...x, top: top + window.scrollY };
-      })
-      .sort((a, b) => a.top - b.top);
-
-    // Plain document-order stacking. Each card aligns to its anchor's top;
-    // if two would overlap, the later one drops below the previous by margin.
-    // No special handling for the active card — its position is stable.
-    let prevBottom = 0;
-    for (const row of anchored) {
-      let y = row.top;
-      if (y < prevBottom + margin) y = prevBottom + margin;
-      row.card.style.top = y + 'px';
-      row.card.style.left = cardLeft + 'px';
-      row.card.classList.remove('tdoc-unanchored');
-      prevBottom = y + row.card.offsetHeight;
-    }
-
-    // Unanchored cards: each lands at its own fallback Y, **independent of
-    // other cards**. Earlier (lower-Y) cards anchor first; later ones nudge
-    // down only if they would directly overlap the previous one. Adding or
-    // removing a single unanchored comment must not cascade and shift every
-    // card below it — that was the bug the user reported.
+    // Unified layout: every card (anchored + unanchored with fallback) is
+    // placed in a single Y-sorted pass. This eliminates the inter-group
+    // overlap class — previously anchored cards and unanchored-with-fallback
+    // cards used independent prevBottoms and could land on top of each
+    // other when their Ys interleaved.
     //
-    // Cards without a saved fallback (created before fallback was a feature)
-    // get parked at the bottom in their existing document order.
+    // Cards without a fallback ratio (legacy comments) park below the
+    // article in stable id order — their Y depends only on themselves and
+    // the article height, so adding/removing other cards doesn't ripple.
     const articleEl = metrics.el || document.body;
     const articleTop = articleEl.getBoundingClientRect().top + window.scrollY;
     const articleHeight = Math.max(1, articleEl.scrollHeight);
-    const unanchoredAll = state.activeComments
-      .map(c => ({ c, card: state.cardEls.get(c.id) }))
-      .filter(x => x.card && !state.anchorMarks.get(x.c.id));
-    const withFb = unanchoredAll
-      .filter(x => x.c.anchor?.fallback && typeof x.c.anchor.fallback.ratio === 'number')
-      .map(x => ({ ...x, y: articleTop + x.c.anchor.fallback.ratio * articleHeight }))
-      .sort((a, b) => a.y - b.y);
-    // Sort legacy-no-fallback cards by id (which encodes creation timestamp)
-    // so the tail order is stable across re-renders. Adding/removing a newer
-    // card never shifts older ones.
-    const withoutFb = unanchoredAll
-      .filter(x => !(x.c.anchor?.fallback && typeof x.c.anchor.fallback.ratio === 'number'))
-      .sort((a, b) => (a.c.id || '').localeCompare(b.c.id || ''));
 
-    // Fallback-positioned: lay out at their own Y, only nudging down if the
-    // immediately-previous card in the SAME group would overlap.
-    let lastBottom = 0;
-    for (const { card, c, y: wantY } of withFb) {
-      let y = wantY;
-      if (y < lastBottom + margin) y = lastBottom + margin;
-      card.style.top = y + 'px';
-      card.style.left = cardLeft + 'px';
-      card.classList.add('tdoc-unanchored');
-      renderGhostMarker(c.id, articleTop + c.anchor.fallback.ratio * articleHeight);
-      lastBottom = y + card.offsetHeight;
+    const rows = [];
+    for (const c of state.activeComments) {
+      const card = state.cardEls.get(c.id);
+      if (!card) continue;
+      const mark = state.anchorMarks.get(c.id);
+      if (mark && (mark.ranges?.[0] || mark.el)) {
+        // Anchored: place at its anchor's vertical position.
+        const r = (mark.ranges?.[0] || mark.el).getBoundingClientRect();
+        rows.push({ card, c, y: r.top + window.scrollY, anchored: true });
+      } else if (c.anchor?.fallback && typeof c.anchor.fallback.ratio === 'number') {
+        // Unanchored with saved fallback: place at the original ratio.
+        rows.push({ card, c, y: articleTop + c.anchor.fallback.ratio * articleHeight, anchored: false });
+      }
     }
-    // Legacy cards without fallback go below the article, in a stable order
-    // (sorted by id above). Y is anchored to articleBottom — not to any other
-    // card — so adding/removing anywhere else doesn't ripple here.
+    rows.sort((a, b) => a.y - b.y);
+
+    let prevBottom = 0;
+    for (const row of rows) {
+      let y = row.y;
+      if (y < prevBottom + margin) y = prevBottom + margin;
+      row.card.style.top = y + 'px';
+      row.card.style.left = cardLeft + 'px';
+      if (row.anchored) row.card.classList.remove('tdoc-unanchored');
+      else {
+        row.card.classList.add('tdoc-unanchored');
+        // Ghost marker shows where the deleted text USED to be — only
+        // meaningful when the anchor was lost involuntarily (the doc was
+        // rewritten). When the user explicitly removed the anchor via the
+        // "Remove anchor" pill, we set kind:'none' and shouldn't render a
+        // ghost at all (they intentionally cleared it).
+        if (row.c.anchor?.kind !== 'none') {
+          renderGhostMarker(row.c.id, articleTop + row.c.anchor.fallback.ratio * articleHeight);
+        } else {
+          removeGhostMarker(row.c.id);
+        }
+      }
+      prevBottom = y + row.card.offsetHeight;
+    }
+
+    // Legacy cards without fallback go below the article, stable id-sorted.
     const articleBottom = articleTop + articleHeight;
-    let tailY = articleBottom + 32;
+    const withoutFb = state.activeComments
+      .map(c => ({ c, card: state.cardEls.get(c.id) }))
+      .filter(x => x.card && !state.anchorMarks.get(x.c.id) && !(x.c.anchor?.fallback && typeof x.c.anchor.fallback.ratio === 'number'))
+      .sort((a, b) => (a.c.id || '').localeCompare(b.c.id || ''));
+    let tailY = Math.max(articleBottom + 32, prevBottom + margin);
     for (const { card } of withoutFb) {
       card.style.top = tailY + 'px';
       card.style.left = cardLeft + 'px';
@@ -1349,6 +1342,10 @@
       document.body.appendChild(g);
     }
     g.style.top = pageY + 'px';
+  }
+  function removeGhostMarker(commentId) {
+    const g = document.querySelector(`.tdoc-ghost-marker[data-comment-id="${CSS.escape(commentId)}"]`);
+    if (g) g.remove();
   }
 
   function setActiveComment(id) {
