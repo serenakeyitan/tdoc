@@ -141,6 +141,53 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, entry);
   }
 
+  // Agent reply: posts a reply attributed to `tdoc-agent` and updates the
+  // parent comment's status. Local: no auth (anyone running the local server
+  // is the doc owner). Mirrors /api/agent/reply on the published worker.
+  if (p === '/api/agent/reply' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { slug, parent_id, text, status: agentStatus, applied_in } = body;
+    if (!slug || !parent_id || !text) return json(res, 400, { error: 'slug, parent_id, text required' });
+    const file = path.join(ROOT, slug, 'comments.json');
+    const all = readJson(file, []);
+    const parent = all.find(c => c.id === parent_id);
+    if (!parent) return json(res, 404, { error: 'parent_not_found' });
+    if (!Array.isArray(parent.replies)) parent.replies = [];
+    const reply = {
+      id: `r_${Date.now()}`,
+      parent_id,
+      text,
+      author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
+      agent_status: ['applied', 'partial', 'question'].includes(agentStatus) ? agentStatus : null,
+      created: new Date().toISOString(),
+      reactions: {},
+    };
+    parent.replies.push(reply);
+    if (agentStatus === 'applied') {
+      parent.status = 'applied';
+      if (applied_in) parent.applied_in = applied_in;
+    } else if (agentStatus === 'question' || agentStatus === 'partial') {
+      parent.status = 'open';
+    }
+    writeJson(file, all);
+    return json(res, 200, reply);
+  }
+
+  // Re-anchor an existing comment without changing its text/thread state.
+  // Used by the "click unanchored, then select new text" flow.
+  if (p === '/api/comments' && req.method === 'PATCH') {
+    const body = await readBody(req);
+    const { slug, id, anchor } = body;
+    if (!slug || !id || !anchor) return json(res, 400, { error: 'slug, id, anchor required' });
+    const file = path.join(ROOT, slug, 'comments.json');
+    const all = readJson(file, []);
+    const target = all.find(c => c.id === id);
+    if (!target) return json(res, 404, { error: 'not_found' });
+    target.anchor = anchor;
+    writeJson(file, all);
+    return json(res, 200, target);
+  }
+
   if (p === '/api/comments' && req.method === 'DELETE') {
     const slug = url.searchParams.get('slug');
     const id = url.searchParams.get('id');

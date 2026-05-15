@@ -441,6 +441,27 @@ export default {
       return json(entry);
     }
 
+    // Re-anchor a comment. Only the original author can re-anchor their own
+    // comment. Same shape as POST except `id` and `anchor` are required.
+    if (p === '/api/comments' && method === 'PATCH') {
+      const s = await getSession(env, req);
+      if (!s) return json({ error: 'sign_in_required' }, { status: 401 });
+      let body = {};
+      try { body = await req.json(); } catch {}
+      const { slug, id, anchor } = body;
+      if (!slug || !id || !anchor) return json({ error: 'slug, id, anchor required' }, { status: 400 });
+      const raw = await env.META.get(`comments:${slug}`);
+      const list = raw ? JSON.parse(raw) : [];
+      const target = list.find(c => c.id === id);
+      if (!target) return json({ error: 'not_found' }, { status: 404 });
+      if (target.author && target.author.login !== s.login) {
+        return json({ error: 'not_author' }, { status: 403 });
+      }
+      target.anchor = anchor;
+      await env.META.put(`comments:${slug}`, JSON.stringify(list));
+      return json(target);
+    }
+
     if (p === '/api/comments' && method === 'DELETE') {
       const s = await getSession(env, req);
       if (!s) return json({ error: 'sign_in_required' }, { status: 401 });
@@ -512,6 +533,45 @@ export default {
       toggle(target);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
       return json({ ok: true, reactions: target.reactions });
+    }
+
+    // ---- agent reply (from `tdoc edit` after applying a comment) ----
+    // Authenticated with the same upload token as /api/upload — only the doc
+    // owner's machine has it, so this can't be spoofed by readers. Posts a
+    // reply on the parent comment, attributed to the `tdoc-agent` identity.
+    // status values: 'applied', 'partial', 'question'. The status appears as
+    // a visible badge on the reply and also flips the parent comment's
+    // status to 'applied' / 'open' so the dashboard reflects it.
+    if (p === '/api/agent/reply' && method === 'POST') {
+      const unauth = requireUploadAuth(req, env);
+      if (unauth) return unauth;
+      let body = {};
+      try { body = await req.json(); } catch {}
+      const { slug, parent_id, text: replyText, status: agentStatus, applied_in } = body;
+      if (!slug || !parent_id || !replyText) return json({ error: 'slug, parent_id, text required' }, { status: 400 });
+      const raw = await env.META.get(`comments:${slug}`);
+      const list = raw ? JSON.parse(raw) : [];
+      const parent = list.find(c => c.id === parent_id);
+      if (!parent) return json({ error: 'parent_not_found' }, { status: 404 });
+      if (!Array.isArray(parent.replies)) parent.replies = [];
+      const reply = {
+        id: `r_${Date.now()}_${rand(4)}`,
+        parent_id,
+        text: replyText,
+        author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
+        agent_status: ['applied', 'partial', 'question'].includes(agentStatus) ? agentStatus : null,
+        created: new Date().toISOString(),
+        reactions: {},
+      };
+      parent.replies.push(reply);
+      if (agentStatus === 'applied') {
+        parent.status = 'applied';
+        if (applied_in) parent.applied_in = applied_in;
+      } else if (agentStatus === 'question' || agentStatus === 'partial') {
+        parent.status = 'open';
+      }
+      await env.META.put(`comments:${slug}`, JSON.stringify(list));
+      return json(reply);
     }
 
     // ---- admin upload (from `tdoc publish`) ----

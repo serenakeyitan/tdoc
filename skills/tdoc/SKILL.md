@@ -115,13 +115,57 @@ sleep 1
 
 ### `/tdoc edit <slug> [<extra prompt>]` — new version from comments
 
+You MUST report back on every open comment — applied, partial, or unclear.
+This is a hard requirement, not a suggestion. The user can't tell which
+comments you handled unless you reply on each one. Skipping comments
+silently is the #1 source of regression complaints.
+
 1. Read `~/tdocs/<slug>/comments.json` — filter to `status: "open"`.
 2. Read latest version's `index.html`.
-3. Regenerate as `v<n+1>/index.html` incorporating each comment. A comment has:
-   - `anchor.text` — the exact text the user highlighted
-   - `text` — what they want changed
-4. Mark applied comments as `status: "applied"` in `comments.json`, with `applied_in: n+1`.
+3. For EACH open comment, decide one of three outcomes BEFORE writing:
+   - **applied** — the comment is clear and you can act on it.
+   - **partial** — you applied part of it but couldn't fully address it
+     (e.g. the user asked to "add a chart and explain compound interest";
+     you added the chart but the explanation is shallow).
+   - **question** — you can't act without clarification (the comment is
+     ambiguous, contradicts another comment, or refers to content that
+     doesn't exist in the current doc).
+4. Regenerate as `v<n+1>/index.html` incorporating every `applied` and
+   `partial` comment. A comment's anchor has:
+   - `anchor.text` — the exact text the user highlighted (may span across
+     paragraphs and inline elements)
+   - `anchor.context_before` / `anchor.context_after` — surrounding text
+     (~60 chars each side) for disambiguation when the same text appears
+     multiple times
 5. Append to `meta.json` versions array.
+6. **For each comment, post an agent reply** so the user sees the outcome
+   in the doc UI. This is mandatory.
+
+   **For published docs** — POST to `https://<your-worker>/api/agent/reply`
+   with the upload token from `~/.tdoc/published.json`:
+   ```bash
+   TOKEN=$(jq -r .upload_token ~/.tdoc/published.json)
+   WORKER=$(jq -r '.worker + "." + .subdomain' ~/.tdoc/published.json)
+   curl -sS -X POST "https://${WORKER}.workers.dev/api/agent/reply" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d "{\"slug\":\"<slug>\",\"parent_id\":\"<comment_id>\",\"text\":\"<one or two sentences>\",\"status\":\"applied\",\"applied_in\":<n+1>}"
+   ```
+
+   **For local-only docs** — POST to `http://localhost:7878/api/agent/reply`
+   (no token needed).
+
+   The reply text should be specific:
+   - applied: "Rewrote the second paragraph in English. The section heading
+     is now 'What an Agent Needs'."
+   - partial: "Added the chart but the compound-interest explainer is still
+     basic — want me to flesh it out?"
+   - question: "Two of your comments asked for different tones — formal in
+     the intro and casual in section II. Which should I prioritize?"
+
+7. Update `comments.json`: set `status: "applied"` (or leave `"open"` for
+   partial/question) and `applied_in: n+1`. The agent-reply endpoint
+   already flips the status server-side; this keeps the local file in sync.
 6. Open `http://localhost:7878/d/<slug>/v/<n+1>`.
 
 If there are zero open comments AND no extra prompt, ask the user what to change before doing anything.

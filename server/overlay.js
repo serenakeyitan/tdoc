@@ -181,11 +181,30 @@
   .tdoc-margin-comment { position: absolute; width: 280px; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); font: 13px system-ui, sans-serif; transition: box-shadow .15s, transform .15s; z-index: 999996; pointer-events: auto; }
   .tdoc-margin-comment.active { box-shadow: 0 4px 16px rgba(22,82,240,0.18); border-color: #1652f0; }
   .tdoc-margin-comment.tdoc-unanchored { border-style: dashed; }
-  .tdoc-margin-comment.tdoc-unanchored::before { content: 'unanchored'; display: block; font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .tdoc-reanchor-btn { display: none; font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 6px; cursor: pointer; background: none; border: none; padding: 0; text-align: left; }
+  .tdoc-margin-comment.tdoc-unanchored .tdoc-reanchor-btn { display: block; }
+  .tdoc-margin-comment.tdoc-unanchored .tdoc-reanchor-btn:hover { color: #1652f0; }
+  /* While re-anchor mode is active, dim the rest of the UI and prompt the
+     user to select. */
+  body.tdoc-reanchoring::before { content: 'Select text to re-anchor this comment, or press Esc to cancel'; position: fixed; top: 56px; left: 50%; transform: translateX(-50%); background: #1652f0; color: #fff; padding: 6px 14px; border-radius: 999px; font: 12px system-ui; z-index: 999999; pointer-events: none; }
+  /* Ghost marker — a faint horizontal line at the unanchored comment's
+     original Y position, so the user can see where the deleted text used
+     to be. Stays in document coordinates. */
+  .tdoc-ghost-marker { position: absolute; left: 0; right: 320px; height: 0; border-top: 1px dashed #d4d4d4; pointer-events: none; z-index: 999990; }
+  body.tdoc-narrow .tdoc-ghost-marker { display: none; }
   .tdoc-margin-comment .author { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
   .tdoc-margin-comment .author img { width: 24px; height: 24px; border-radius: 50%; }
   .tdoc-margin-comment .author .login { font-weight: 600; color: #111; font-size: 13px; }
   .tdoc-margin-comment .author .anon { color: #888; font-style: italic; }
+  /* Agent identity — a simple "⚡ tdoc-agent" badge in place of an avatar.
+     The status chip on agent replies (applied / partial / question) lets
+     the user tell at a glance whether their comment was addressed. */
+  .tdoc-agent-badge { display: inline-flex; width: 24px; height: 24px; border-radius: 50%; background: #111; color: #fff; align-items: center; justify-content: center; font-size: 13px; }
+  .tdoc-agent-reply { background: #fafafb; border-left: 3px solid #111; padding-left: 8px; }
+  .tdoc-agent-status { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; margin: 0 0 6px; font-weight: 600; }
+  .tdoc-agent-status-applied { background: #e8f5ed; color: #1a7340; }
+  .tdoc-agent-status-partial { background: #fff4dc; color: #8a5a00; }
+  .tdoc-agent-status-question { background: #ffe7e7; color: #a52323; }
   .tdoc-margin-comment .text { color: #111; line-height: 1.45; word-wrap: break-word; }
   .tdoc-margin-comment .meta { font-size: 11px; color: #888; margin-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
   .tdoc-margin-comment .meta > span:first-child { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -200,9 +219,28 @@
 
   /* Reactions + emoji picker */
   .tdoc-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; align-items: center; }
-  .tdoc-react-chip { display: inline-flex; align-items: center; gap: 4px; font: 12px system-ui; background: #f5f6f8; border: 1px solid #e5e5e5; border-radius: 999px; padding: 2px 8px; cursor: pointer; color: #333; transition: background .12s, border-color .12s; }
+  .tdoc-react-chip { position: relative; display: inline-flex; align-items: center; gap: 4px; font: 12px system-ui; background: #f5f6f8; border: 1px solid #e5e5e5; border-radius: 999px; padding: 2px 8px; cursor: pointer; color: #333; transition: background .12s, border-color .12s; }
   .tdoc-react-chip:hover { background: #eef0f3; }
   .tdoc-react-chip.mine { background: #e8eeff; border-color: #1652f0; color: #1652f0; }
+  /* Custom reactors tooltip — shows the GitHub logins (or agent labels) of
+     everyone who used this emoji. Native title= has ~1s delay; this is
+     instant and styled to match the doc. */
+  .tdoc-react-chip[data-users]:hover::after {
+    content: attr(data-users);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #111;
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font: 11px/1.3 system-ui;
+    white-space: pre;
+    max-width: 240px;
+    pointer-events: none;
+    z-index: 999999;
+  }
   .tdoc-react-add { background: transparent; border: none; color: #aaa; padding: 0; cursor: pointer; line-height: 1; transition: color .12s, opacity .12s; display: inline-flex; align-items: center; }
   .tdoc-react-add svg { width: 16px; height: 16px; display: block; }
   .tdoc-reactions .tdoc-react-add { opacity: 0; padding: 2px 4px; }
@@ -381,6 +419,7 @@
     anchorMarks: new Map(),        // id -> { kind, el? (fallback span or outline), ranges? (Highlight API), targetEl? }
     activeId: null,
     narrow: false,
+    reanchoringId: null,           // comment id awaiting a new selection for re-anchoring
   };
 
   // Highlight API: one shared registry for pending, one per saved comment.
@@ -785,8 +824,14 @@
   const REACT_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/><line x1="19" y1="6" x2="19" y2="10"/><line x1="21" y1="8" x2="17" y2="8"/></svg>`;
 
   function renderAuthor(author) {
-    if (author) return `<div class="author"><img src="${author.avatar_url}" alt=""><span class="login">${escapeHtml(author.login)}</span></div>`;
-    return `<div class="author"><span class="anon">anonymous</span></div>`;
+    if (!author) return `<div class="author"><span class="anon">anonymous</span></div>`;
+    if (author.kind === 'agent') {
+      // Agent identity (currently always 'tdoc-agent'). No avatar URL — use
+      // a generic icon-circle to differentiate from human commenters.
+      return `<div class="author tdoc-agent-author"><span class="tdoc-agent-badge">⚡</span><span class="login">${escapeHtml(author.login || 'tdoc-agent')}</span></div>`;
+    }
+    const avatar = author.avatar_url ? `<img src="${escapeHtml(author.avatar_url)}" alt="">` : '';
+    return `<div class="author">${avatar}<span class="login">${escapeHtml(author.login || 'anonymous')}</span></div>`;
   }
   function renderReactionsRow(target) {
     const reactions = target.reactions || {};
@@ -795,7 +840,7 @@
     if (!entries.length) return '';
     const chips = entries.map(([emoji, users]) => {
       const mine = users.includes(me);
-      return `<span class="tdoc-react-chip${mine ? ' mine' : ''}" data-emoji="${escapeHtml(emoji)}" data-target-id="${target.id}" title="${users.map(escapeHtml).join(', ')}">${emoji} ${users.length}</span>`;
+      return `<span class="tdoc-react-chip${mine ? ' mine' : ''}" data-emoji="${escapeHtml(emoji)}" data-target-id="${target.id}" data-users="${users.map(escapeHtml).join('\n')}">${emoji} ${users.length}</span>`;
     }).join('');
     return `<div class="tdoc-reactions" data-target-id="${target.id}">${chips}<button class="tdoc-react-add" data-target-id="${target.id}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button></div>`;
   }
@@ -805,8 +850,17 @@
   function renderReply(reply) {
     const canDelete = !isFork && (!isPublished || (identity && reply.author && identity.login === reply.author.login));
     const hasReactions = reply.reactions && Object.values(reply.reactions).some(u => u && u.length > 0);
-    return `<div class="tdoc-reply" data-comment-id="${reply.id}">
+    const isAgent = reply.author?.kind === 'agent';
+    const statusChip = reply.agent_status
+      ? `<span class="tdoc-agent-status tdoc-agent-status-${reply.agent_status}">${
+          reply.agent_status === 'applied' ? '✓ applied' :
+          reply.agent_status === 'partial' ? '◐ partial' :
+          '? question'
+        }</span>`
+      : '';
+    return `<div class="tdoc-reply${isAgent ? ' tdoc-agent-reply' : ''}" data-comment-id="${reply.id}">
       ${renderAuthor(reply.author)}
+      ${statusChip}
       <div class="text">${escapeHtml(reply.text)}</div>
       ${hasReactions ? renderReactionsRow(reply) : ''}
       <div class="meta">
@@ -826,6 +880,7 @@
     const replies = Array.isArray(comment.replies) ? comment.replies : [];
     const hasReactions = comment.reactions && Object.values(comment.reactions).some(u => u && u.length > 0);
     card.innerHTML = `
+      ${isFork ? '' : `<button class="tdoc-reanchor-btn" type="button" data-id="${comment.id}">unanchored — click to re-anchor</button>`}
       ${renderAuthor(comment.author)}
       <div class="text">${escapeHtml(comment.text)}</div>
       ${hasReactions ? renderReactionsRow(comment) : ''}
@@ -867,6 +922,9 @@
 
     const copyMdBtn = card.querySelector('.copy-md');
     if (copyMdBtn) copyMdBtn.onclick = (e) => { e.stopPropagation(); window.__tdocCopyCommentMd(comment.id, copyMdBtn); };
+
+    const reBtn = card.querySelector('.tdoc-reanchor-btn');
+    if (reBtn) reBtn.onclick = (e) => { e.stopPropagation(); startReanchor(comment.id); };
 
     card.querySelectorAll('.del').forEach(del => {
       del.onclick = async (e) => {
@@ -1045,16 +1103,48 @@
       prevBottom = y + row.card.offsetHeight;
     }
 
+    // Unanchored cards: place them near where the anchor USED to be (using
+    // the fallback position captured at create time). Falls back to a
+    // post-anchored-stack location only if no fallback was saved.
+    const articleEl = metrics.el || document.body;
+    const articleTop = articleEl.getBoundingClientRect().top + window.scrollY;
+    const articleHeight = Math.max(1, articleEl.scrollHeight);
     const unanchored = state.activeComments
       .map(c => ({ c, card: state.cardEls.get(c.id) }))
-      .filter(x => x.card && !state.anchorMarks.get(x.c.id));
-    for (const { card } of unanchored) {
-      const y = Math.max(prevBottom + 32, 100);
+      .filter(x => x.card && !state.anchorMarks.get(x.c.id))
+      .map(x => {
+        const fb = x.c.anchor?.fallback;
+        let y;
+        if (fb && typeof fb.ratio === 'number') {
+          y = articleTop + fb.ratio * articleHeight;
+        } else {
+          y = prevBottom + 32;
+        }
+        return { ...x, y };
+      })
+      .sort((a, b) => a.y - b.y);
+    for (const { card, c, y: wantY } of unanchored) {
+      let y = wantY;
+      if (y < prevBottom + margin) y = prevBottom + margin;
       card.style.top = y + 'px';
       card.style.left = cardLeft + 'px';
       card.classList.add('tdoc-unanchored');
+      // Optional ghost marker — a faint dashed line at the original Y so the
+      // user can see where the deleted text used to be.
+      if (c.anchor?.fallback) renderGhostMarker(c.id, articleTop + c.anchor.fallback.ratio * articleHeight);
       prevBottom = y + card.offsetHeight;
     }
+  }
+
+  function renderGhostMarker(commentId, pageY) {
+    let g = document.querySelector(`.tdoc-ghost-marker[data-comment-id="${CSS.escape(commentId)}"]`);
+    if (!g) {
+      g = document.createElement('div');
+      g.className = 'tdoc-ghost-marker';
+      g.dataset.commentId = commentId;
+      document.body.appendChild(g);
+    }
+    g.style.top = pageY + 'px';
   }
 
   function setActiveComment(id) {
@@ -1122,6 +1212,7 @@
     clearAllCommentHighlights();
     unwrapFallbackSpans();
     document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(el => el.remove());
+    document.querySelectorAll('.tdoc-ghost-marker').forEach(el => el.remove());
     for (const card of commentLayer.querySelectorAll('.tdoc-margin-comment')) card.remove();
     state.anchorMarks.clear();
     state.cardEls.clear();
@@ -1220,6 +1311,13 @@
   }
 
   window.addEventListener('resize', () => requestAnimationFrame(() => { evaluateLayout(); repositionCards(); }));
+  // Esc cancels re-anchor mode globally.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.reanchoringId) {
+      state.reanchoringId = null;
+      document.body.classList.remove('tdoc-reanchoring');
+    }
+  });
   window.addEventListener('scroll', () => requestAnimationFrame(repositionCards), { passive: true });
   if (window.ResizeObserver) new ResizeObserver(() => repositionCards()).observe(document.body);
 
@@ -1471,16 +1569,26 @@
     }
 
     const textarea = popup.querySelector('textarea');
-    if (!needsSignIn) textarea.focus();
+    // Defer focus past the click cycle that follows mouseup — otherwise the
+    // root click handler can steal focus back and the user has to click the
+    // popup before they can type.
+    if (!needsSignIn) requestAnimationFrame(() => textarea.focus());
     popup.querySelector('.x').onclick = closePopup;
 
     const submit = async () => {
       if (needsSignIn) { closePopup(); startDeviceFlow(); return; }
       const text = textarea.value.trim();
       if (!text) return;
+      // Capture a fallback position so the card can stay roughly in place
+      // even when the anchor text is later rewritten. articleY is the
+      // anchor's vertical center, measured as a fraction of the article's
+      // height — stable across viewport widths. nearestHeading is the id
+      // (or text) of the closest preceding h1/h2/h3, used as a structural
+      // landmark if the text-anchor fails entirely.
+      const fallback = captureFallbackPosition(anchor);
       const sendAnchor = anchor.kind === 'text'
-        ? { kind: 'text', text: anchor.text, context_before: anchor.context_before, context_after: anchor.context_after }
-        : { kind: 'element', selector: anchor.selector, label: anchor.label };
+        ? { kind: 'text', text: anchor.text, context_before: anchor.context_before, context_after: anchor.context_after, fallback }
+        : { kind: 'element', selector: anchor.selector, label: anchor.label, fallback };
       const r = await fetch('/api/comments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slug, version, anchor: sendAnchor, text })
@@ -1495,6 +1603,33 @@
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
       if (e.key === 'Escape') closePopup();
     });
+  }
+
+  // Capture position metadata at create time. Used when the saved text
+  // anchor no longer resolves (the doc was rewritten) — the card still
+  // lands near the original location instead of falling to the bottom.
+  function captureFallbackPosition(anchor) {
+    const metrics = getArticleMetrics();
+    const articleEl = metrics.el || document.body;
+    const articleTop = articleEl.getBoundingClientRect().top + window.scrollY;
+    const articleHeight = Math.max(1, articleEl.scrollHeight);
+    let rect = null;
+    if (anchor.kind === 'text' && anchor._range) rect = anchor._range.getBoundingClientRect();
+    else if (anchor.kind === 'element' && anchor._el) rect = anchor._el.getBoundingClientRect();
+    if (!rect) return null;
+    const centerY = rect.top + rect.height / 2 + window.scrollY;
+    const ratio = Math.max(0, Math.min(1, (centerY - articleTop) / articleHeight));
+    // Find the nearest preceding heading for a structural landmark.
+    let nearestHeading = null;
+    const headings = document.querySelectorAll('h1, h2, h3');
+    for (const h of headings) {
+      if (h.closest(UI_CONTAINERS)) continue;
+      const hr = h.getBoundingClientRect();
+      if (hr.top + window.scrollY <= centerY) {
+        nearestHeading = { id: h.id || null, text: h.textContent.trim().slice(0, 80) };
+      } else break;
+    }
+    return { ratio, nearestHeading };
   }
 
   function getContext(range, chars) {
@@ -1635,14 +1770,46 @@
     const sel = window.getSelection();
     const text = sel && sel.toString().trim();
     if (!text || text.length < 2 || !sel.rangeCount) return;
-    // Skip if the selection is inside our own UI (e.g. user selected text in a popup).
     const anchorNode = sel.anchorNode;
     const anchorEl = anchorNode?.nodeType === 1 ? anchorNode : anchorNode?.parentElement;
     if (anchorEl && isInUI(anchorEl)) return;
     const range = sel.getRangeAt(0).cloneRange();
-    const rect = range.getBoundingClientRect();
     const ctx = getContext(range, 60);
+    // Re-anchor mode: rebind an existing unanchored comment to this selection
+    // instead of creating a new one. Captured fallback position is refreshed
+    // too so the comment "moves" to where the user just selected.
+    if (state.reanchoringId) {
+      const id = state.reanchoringId;
+      state.reanchoringId = null;
+      document.body.classList.remove('tdoc-reanchoring');
+      const newAnchor = {
+        kind: 'text', text, context_before: ctx.before, context_after: ctx.after,
+        fallback: captureFallbackPosition({ kind: 'text', _range: range }),
+      };
+      fetch('/api/comments', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug, id, anchor: newAnchor }),
+      }).then(r => {
+        if (r.status === 401) startDeviceFlow();
+        return r.ok ? refreshComments() : null;
+      });
+      window.getSelection()?.removeAllRanges();
+      return;
+    }
+    const rect = range.getBoundingClientRect();
     openPopup({ kind: 'text', text, context_before: ctx.before, context_after: ctx.after, _range: range }, rect);
+  }
+
+  // Begin the re-anchor flow: future text selection on the doc will rebind
+  // this comment instead of creating a new one. Toggle off if clicked again.
+  function startReanchor(id) {
+    if (state.reanchoringId === id) {
+      state.reanchoringId = null;
+      document.body.classList.remove('tdoc-reanchoring');
+      return;
+    }
+    state.reanchoringId = id;
+    document.body.classList.add('tdoc-reanchoring');
   }
 
   // ========== Hover affordance ==========
