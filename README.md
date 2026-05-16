@@ -6,9 +6,9 @@ See it live: https://tdoc.serenatan.workers.dev
 
 > check out my recent work at https://github.com/agent-team-foundation/first-tree 🥇
 
-**Turn a prompt into an interactive HTML doc, share it as a live URL, get comments back.**
+**Turn a prompt into an interactive doc, share it as a live URL, get Google-Docs-style comments back — straight into your agent.**
 
-Open-source take on Jesse Pollak's bdocs concept. Same idea: prose, sliders, charts, simulations — authored by an agent, not maintained by hand. The difference: tdoc deploys to **your own free Cloudflare Worker**, so you get a public shareable link with zero hosting cost and zero infra to manage.
+Open-source take on Jesse Pollak's bdocs concept. Authored by an agent, not maintained by hand. tdoc deploys to **your own free Cloudflare Worker**, so you get a public shareable link with zero hosting cost and zero infra to manage — and it's a Claude Code / Codex **skill** with built-in version control.
 
 ```
 You:  /tdoc new "an explainer with a slider showing how interest compounds"
@@ -17,13 +17,20 @@ You:  /tdoc publish
 Claude: https://tdoc.yourname.workers.dev/d/compound-interest/v/1
 ```
 
-Anyone with the link reads it instantly. Signs in with GitHub to comment on any sentence, image, or chart. You pull the comments back (`/tdoc pull`), tell Claude what to do with them, and it regenerates v2.
+Anyone with the link reads it instantly and comments on any sentence, image, or chart. Your agent pulls those comments, regenerates the next version, and replies on each comment with ✅ applied / 🟡 partial / ❓ question — so you can see exactly what got addressed without leaving the doc.
 
 ## The painpoint
 
-The best docs you write today aren't Google Docs — they're interactive HTML pages: models with sliders, decision frameworks with SVG diagrams, strategy docs that feel like products. But there's no good home for them. GitHub Pages is for code repos. Notion can't run a JS simulation. Local files won't share. You end up emailing zip files or screenshotting your work.
+**You no longer need to be the router between your colleagues' comments and your agent.**
 
-`tdoc` is the missing home: prompt → interactive HTML → public URL → comments → regenerate. All free, all yours.
+Feedback on docs from a chat was always a tradeoff:
+
+- A nice UI for people to comment (Google Doc, Slack thread, screenshots) → but you copy-paste it all back to the AI by hand, every round.
+- Or clean structured input the agent can act on (raw JSON, "edit line 47") → but nobody wants to write feedback that way.
+
+And docs made in chat have no version history — every regeneration overwrites the last.
+
+`tdoc` gives you both sides: humans comment Google-Docs-style on any sentence/image/chart, the agent reads the same comments as structured input, and every edit is a new version you can flip back to. All free, all yours.
 
 ## Install
 
@@ -42,10 +49,11 @@ Or via the plugin marketplace: `/plugin marketplace add serenakeyitan/tdoc`
 | Command | What it does |
 |---|---|
 | `/tdoc new <prompt>` | Generate a new doc + open locally |
-| `/tdoc edit <slug>` | Regenerate the doc from any open comments |
+| `/tdoc edit <slug>` | New version from open comments; replies on each with ✅/🟡/❓ status |
 | `/tdoc publish <slug>` | Deploy to your Cloudflare Worker, get a public URL |
 | `/tdoc pull <slug>` | Sync comments from the published doc back to local |
 | `/tdoc fork <slug>` | Copy a doc to a new slug |
+| `/tdoc unpublish <slug>` | Remove a published doc from your Worker |
 | `/tdoc list` | Show all docs |
 | `/tdoc onboard` | First-time guided setup |
 | `/tdoc update` | Pull the latest skill code |
@@ -57,10 +65,13 @@ Or via the plugin marketplace: `/plugin marketplace add serenakeyitan/tdoc`
 
 ## How comments work
 
-- **Text**: highlight any sentence → comment popup
-- **Artifacts** (img / canvas / svg / video / `<pre>`): hover → "Comment" pill in the corner → click
-- **Threads**: each comment has emoji reactions (👍 ❤️ 🔥 ✅ ❓ + `LGTM`) and replies
-- **Auth**: published commenting requires GitHub sign-in (Device Flow, scope `read:user`)
+- **Text**: highlight any sentence (across paragraphs, across bold/links — anchors survive regeneration) → comment popup, cursor ready to type
+- **Artifacts** (img / canvas / svg / video / `<pre>`): hover → "Comment" pill → click
+- **Threads**: emoji reactions (👍 ❤️ 🔥 ✅ ❓ + `LGTM`) and replies; hover a reaction to see who reacted
+- **Move / remove anchor**: drag a comment to new text, or detach it entirely — it stays in the thread
+- **Versions**: a `v3 ▾` picker in the top bar — every version is kept and browsable
+- **Agent replies**: when your agent regenerates from comments, it replies on each with `tdoc-agent` and a status emoji (✅ applied / 🟡 partial / ❓ needs clarification)
+- **Auth**: local docs comment anonymously with zero setup. Published docs require a one-time GitHub sign-in (Device Flow, scope `read:user`) before commenting.
 
 ## Requirements
 
