@@ -1866,20 +1866,123 @@
 
   // ========== Drag-to-comment on artifacts ==========
   const COMMENTABLE = 'img, svg, canvas, video, pre, figure, iframe[src]';
+  // The doc content root (per SKILL.md every doc wraps content in one of
+  // these). resolveArtifact must never climb into/past it.
+  const ARTICLE_ROOT_SEL = 'main, article, .wrap, .content, .container';
   const DRAG_THRESHOLD = 5;
   let dragState = null;
 
   function isInUI(el) {
     return el && el.closest && el.closest(UI_ALL);
   }
+
+  // Resolve the *meaningful* artifact boundary for a hovered/hit leaf.
+  //
+  // COMMENTABLE only lists leaf media (img/svg/canvas/video/pre/figure/
+  // iframe). But docs frequently compose a single visual artifact out of
+  // <div>s wrapping a nested media element — e.g. a phone mockup
+  // <div class="phone" id="..."> ... <svg> progress ring </svg> ... </div>.
+  // `closest(COMMENTABLE)` would resolve to the inner <svg> (the ring),
+  // so the outline/anchor hugs a tiny inner region instead of the artifact
+  // the author intended. This climbs from the leaf to the outermost
+  // wrapper that the author clearly treats as ONE artifact unit.
+  //
+  // Algorithm (climb from the media leaf, pick the outermost UNIT):
+  //   • <figure> is a hard stop — it IS the artifact unit; return it,
+  //     never climb past it.
+  //   • Otherwise prefer the nearest ANCESTOR-WITH-AN-ID that the author
+  //     created as a self-contained component: it must be narrower than a
+  //     full-width content band (a layout/padding wrapper like
+  //     `.phone-stage` spans the column and is NOT the artifact), and the
+  //     leaf must be a substantial visual part of it.
+  //   • Bridge pure pass-through wrappers (a parent whose ONLY element
+  //     child is the thing we're climbing) so a `.ring-wrap`-style div
+  //     doesn't block us from reaching the id'd unit.
+  //   • Stop at comment-anchored elements (anchor stability), UI/article
+  //     boundaries, <body>. Never expand to a near-full-width band.
+  function isFullWidthBand(el) {
+    const r = el.getBoundingClientRect();
+    return !r.width || r.width >= window.innerWidth * 0.9;
+  }
+  function isArtifactUnit(parent, leaf) {
+    if (!parent || parent === document.body || parent.nodeType !== 1) return false;
+    if (parent.closest && (parent.closest(UI_ALL) || isInUI(parent))) return false;
+    if (parent.tagName.toLowerCase() === 'figure') return true;
+    if (!parent.id) return false;
+    if (isFullWidthBand(parent)) return false; // layout/padding wrapper, not the unit
+    const pr = parent.getBoundingClientRect();
+    const lr = leaf.getBoundingClientRect();
+    if (!pr.width || !pr.height) return false;
+    // The media leaf is a meaningful chunk of this id'd component (not a
+    // stray tiny icon inside a big id'd section).
+    const areaRatio = (lr.width * lr.height) / (pr.width * pr.height);
+    return areaRatio > 0.04;
+  }
+  // True if `node` sits within (or is) a resolved artifact — including the
+  // wrapper region around a nested media leaf. Used to keep text-marquee
+  // drags from starting on composite artifacts (e.g. the phone mockup's
+  // padding, which is a <div>, not a COMMENTABLE leaf).
+  function isWithinArtifact(node) {
+    if (!node || node.nodeType !== 1) return false;
+    const direct = node.matches(COMMENTABLE) ? node : node.closest(COMMENTABLE);
+    if (direct) return true;
+    // Climb: is any ancestor a resolved-artifact wrapper that contains a
+    // COMMENTABLE descendant? (cheap walk, capped)
+    let el = node, guard = 0;
+    while (el && el !== document.body && guard++ < 14) {
+      if (
+        el.querySelector &&
+        el.querySelector(COMMENTABLE) &&
+        resolveArtifact(el.querySelector(COMMENTABLE)) === el
+      ) {
+        return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  }
+  function resolveArtifact(leaf) {
+    if (!leaf || leaf.nodeType !== 1) return leaf;
+    // If the leaf is already inside a comment-anchored element, keep that
+    // exact element so existing anchors don't shift.
+    if (leaf.closest && leaf.closest('[data-tdoc-anchored]')) {
+      return leaf.closest('[data-tdoc-anchored]');
+    }
+    // Climb freely. Stop at the article/page boundary (the doc content
+    // root .wrap/main/article/etc, a near-full-width band, <body>, or UI).
+    // <figure> is the definitive unit. Otherwise the artifact is the
+    // OUTERMOST id'd, non-full-width ancestor that still reasonably bounds
+    // the media leaf — intermediate multi-child divs (a phone "screen"
+    // holding ring + buttons + nav) are climbed through freely; they are
+    // not the unit, the id'd component is. Never let the article content
+    // root itself become "the artifact".
+    let el = leaf;
+    let best = leaf;
+    let guard = 0;
+    while (el.parentElement && guard++ < 16) {
+      const parent = el.parentElement;
+      if (parent === document.body) break;
+      if (parent.closest && (parent.closest(UI_ALL) || isInUI(parent))) break;
+      // The doc's content root is a boundary, never an artifact.
+      if (parent.matches && parent.matches(ARTICLE_ROOT_SEL)) break;
+      if (parent.tagName && parent.tagName.toLowerCase() === 'figure') {
+        return parent; // semantic artifact unit — definitive, stop here
+      }
+      if (isFullWidthBand(parent)) break; // layout/content band — not the artifact
+      if (isArtifactUnit(parent, leaf)) best = parent; // record, keep climbing
+      el = parent;
+    }
+    return best;
+  }
   function rectsOverlap(a, b) { return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom); }
   function findArtifactIntersecting(dragRect) {
     const sx = window.scrollX, sy = window.scrollY;
     for (const el of document.querySelectorAll(COMMENTABLE)) {
       if (isInUI(el)) continue;
-      const r = el.getBoundingClientRect();
+      const resolved = resolveArtifact(el);
+      const r = resolved.getBoundingClientRect();
       const pageRect = { left: r.left + sx, top: r.top + sy, right: r.right + sx, bottom: r.bottom + sy };
-      if (rectsOverlap(pageRect, dragRect)) return el;
+      if (rectsOverlap(pageRect, dragRect)) return resolved;
     }
     return null;
   }
@@ -1909,7 +2012,7 @@
     const t = e.target;
     if (!t || t.nodeType !== 1 || isInUI(t)) return;
     if (t.closest('button, a, input, select, textarea, [contenteditable], [role="button"]')) return;
-    if (t.matches(COMMENTABLE) || t.closest(COMMENTABLE)) return;
+    if (isWithinArtifact(t)) return;
     dragState = { x0: e.pageX, y0: e.pageY, marquee: null, dragged: false };
   }, true);
 
@@ -2135,7 +2238,8 @@
     // The pill itself is in `body` — don't hide UI when the cursor enters it.
     if (t.closest('.tdoc-comment-pill') || t.closest('.tdoc-hover-outline')) return;
     if (isInUI(t)) { hideHoverUI(); return; }
-    const el = t.matches(COMMENTABLE) ? t : t.closest(COMMENTABLE);
+    const leaf = t.matches(COMMENTABLE) ? t : t.closest(COMMENTABLE);
+    const el = leaf ? resolveArtifact(leaf) : null;
     if (!el || isInUI(el)) { hideHoverUI(); return; }
     // Show the pill on EVERY commentable artifact, including those already
     // anchored by an existing comment. Multiple comments on one artifact is
@@ -2150,7 +2254,10 @@
     // Stay shown if cursor moves into the pill or outline.
     if (next.closest && (next.closest('.tdoc-comment-pill') || next.closest('.tdoc-hover-outline'))) return;
     // Stay shown if cursor moves to the same artifact (mouseover children).
-    if (pillTargetEl && next.closest && next.closest(COMMENTABLE) === pillTargetEl) return;
+    if (pillTargetEl && next.closest) {
+      const nextLeaf = next.closest(COMMENTABLE);
+      if (nextLeaf && resolveArtifact(nextLeaf) === pillTargetEl) return;
+    }
     if (isInUI(next)) hideHoverUI();
   });
 
