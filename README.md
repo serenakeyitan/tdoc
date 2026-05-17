@@ -2,6 +2,8 @@
 
 See it live: https://tdoc.serenatan.workers.dev
 
+https://github.com/serenakeyitan/tdoc/releases/download/v0.1.44/tdoc-demo.mp4
+
 <img width="1149" height="603" alt="Screenshot 2026-05-13 at 00 21 01" src="https://github.com/user-attachments/assets/f89b12fa-6661-49b6-b9eb-dc0677e3cf1b" />
 
 > check out my recent work at https://github.com/agent-team-foundation/first-tree 🥇
