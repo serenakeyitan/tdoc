@@ -2001,6 +2001,77 @@
     }
     return best;
   }
+
+  // Given ANY node the cursor is over (the ring, a button, a label, the
+  // empty padding — anything), return the artifact SECTION it belongs to,
+  // or null if it isn't inside one. An artifact section is the OUTERMOST
+  // ancestor (still inside the content column, never the content root) that
+  // contains a media element (img/svg/canvas/video) — i.e. the whole
+  // self-contained block the author composed. The entire section is one
+  // unit: hovering anywhere inside it targets the same section, so the
+  // Comment affordance never jumps as the cursor moves within it.
+  const SECTION_MEDIA = 'img, svg, canvas, video, iframe[src]';
+  function artifactSectionOf(node) {
+    if (!node || node.nodeType !== 1) return null;
+    if (isInUI(node) || (node.closest && node.closest(UI_ALL))) return null;
+    // Existing anchored element wins (keep anchors stable).
+    if (node.closest) {
+      const anchored = node.closest('[data-tdoc-anchored]');
+      if (anchored) return anchored;
+    }
+    // A standalone media element / <figure> / <pre> with no composing
+    // wrapper is itself the section (handled by resolveArtifact climbing).
+    // General case: walk up; the section is the OUTERMOST ancestor that
+    // (a) is inside the content column (not the content root / a full-
+    // bleed band), and (b) still contains at least one media element.
+    let el = node;
+    let section = null;
+    let guard = 0;
+    while (el && el !== document.body && el.nodeType === 1 && guard++ < 30) {
+      if (el.matches && el.matches(ARTICLE_ROOT_SEL)) break;
+      if (el.closest && (el.closest(UI_ALL) || isInUI(el))) break;
+      const parent = el.parentElement;
+      if (!parent || parent === document.body) break;
+      if (parent.matches && parent.matches(ARTICLE_ROOT_SEL)) {
+        // `el` is a direct child of the content root: it's the top-level
+        // block. It's a section only if it actually contains media.
+        if (
+          (el.querySelector && el.querySelector(SECTION_MEDIA)) ||
+          (el.matches && el.matches(SECTION_MEDIA)) ||
+          (el.tagName && el.tagName.toLowerCase() === 'figure') ||
+          (el.tagName && el.tagName.toLowerCase() === 'pre')
+        ) {
+          section = el;
+        }
+        break;
+      }
+      // Promote `el` to a candidate section if it holds media and is not a
+      // full-bleed band (a centered showcase wrapper that spans the column
+      // is NOT the artifact; the framed block inside it is — resolveArtifact
+      // refines that). We keep climbing to find the OUTERMOST such block.
+      const holdsMedia =
+        (el.querySelector && el.querySelector(SECTION_MEDIA)) ||
+        (el.matches && el.matches(SECTION_MEDIA)) ||
+        (el.tagName && (el.tagName.toLowerCase() === 'figure' || el.tagName.toLowerCase() === 'pre'));
+      if (holdsMedia && !isFullWidthBand(el)) section = el;
+      el = parent;
+    }
+    if (!section) return null;
+    // Refine to the tight visual box: if the section wraps a single inner
+    // visual frame (e.g. a full-width .phone-stage around .phone), prefer
+    // the inner framed box so the anchor hugs the actual mockup.
+    const media =
+      (section.matches && section.matches(SECTION_MEDIA))
+        ? section
+        : (section.querySelector && section.querySelector(SECTION_MEDIA));
+    if (media) {
+      const refined = resolveArtifact(media);
+      if (refined && section.contains && section.contains(refined)) {
+        return refined;
+      }
+    }
+    return section;
+  }
   function rectsOverlap(a, b) { return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom); }
   function findArtifactIntersecting(dragRect) {
     const sx = window.scrollX, sy = window.scrollY;
@@ -2209,27 +2280,24 @@
   // in its top-right corner. Click the pill → opens the comment popup anchored
   // to that element. This is the discoverable path; drag-from-outside also
   // works for users who prefer that gesture.
-  let hoverOutlineEl = null, commentPill = null, pillTargetEl = null;
+  // The artifact section is ONE unit. Hovering anywhere inside it shows a
+  // single Comment button anchored to the section's top-right corner — no
+  // full outline. While the cursor stays anywhere within the same section
+  // the button does not move or flicker.
+  let commentPill = null, pillTargetEl = null;
   function showHoverUI(el) {
     if (isFork) return; // read-only: no new-comment affordances
-    if (hoverOutlineEl?._target === el && pillTargetEl === el) return;
+    if (pillTargetEl === el && commentPill) return; // same section — keep as-is
     hideHoverUI();
     const r = el.getBoundingClientRect();
-
-    hoverOutlineEl = document.createElement('div');
-    hoverOutlineEl.className = 'tdoc-hover-outline';
-    hoverOutlineEl._target = el;
-    positionOutlineAround(hoverOutlineEl, el);
-    document.body.appendChild(hoverOutlineEl);
 
     commentPill = document.createElement('button');
     commentPill.className = 'tdoc-comment-pill';
     commentPill.type = 'button';
     commentPill.setAttribute('aria-label', 'Comment on this');
     commentPill.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment`;
-    // Position the pill INSIDE the artifact's top-right corner. Always anchored
-    // to the artifact body so it visually belongs to it. (Kept inside on user
-    // request after trying the outside-only variant.)
+    // Top-right corner of the SECTION, so it visually belongs to the whole
+    // artifact regardless of where inside it the cursor is.
     const pillW = 110;
     commentPill.style.top = (window.scrollY + r.top + 8) + 'px';
     commentPill.style.left = (window.scrollX + Math.max(r.left + 8, r.right - pillW - 8)) + 'px';
@@ -2237,8 +2305,6 @@
       e.stopPropagation();
       e.preventDefault();
       const target = pillTargetEl;
-      // Capture the pill's own rect BEFORE we hide it — that's where the
-      // popup should attach (just above the pill the user clicked).
       const pillRect = commentPill.getBoundingClientRect();
       hideHoverUI();
       if (!target) return;
@@ -2254,7 +2320,6 @@
     document.body.appendChild(commentPill);
   }
   function hideHoverUI() {
-    if (hoverOutlineEl) { hoverOutlineEl.remove(); hoverOutlineEl = null; }
     if (commentPill) { commentPill.remove(); commentPill = null; }
     pillTargetEl = null;
   }
@@ -2263,28 +2328,24 @@
     const t = e.target;
     if (!t || t.nodeType !== 1) return;
     // The pill itself is in `body` — don't hide UI when the cursor enters it.
-    if (t.closest('.tdoc-comment-pill') || t.closest('.tdoc-hover-outline')) return;
+    if (t.closest('.tdoc-comment-pill')) return;
     if (isInUI(t)) { hideHoverUI(); return; }
-    const leaf = t.matches(COMMENTABLE) ? t : t.closest(COMMENTABLE);
-    const el = leaf ? resolveArtifact(leaf) : null;
-    if (!el || isInUI(el)) { hideHoverUI(); return; }
-    // Show the pill on EVERY commentable artifact, including those already
-    // anchored by an existing comment. Multiple comments on one artifact is
-    // a normal pattern (e.g. several reviewers commenting on the same image).
-    // The pill is in the top-right corner; clicking the artifact body still
-    // activates any existing comment as a separate gesture.
-    showHoverUI(el);
+    // ANY element under the cursor → the artifact section it belongs to
+    // (the ring, a button, a label, empty padding — all map to the SAME
+    // section). Hovering anywhere inside one artifact targets the whole
+    // artifact as one unit.
+    const section = artifactSectionOf(t);
+    if (!section || isInUI(section)) { hideHoverUI(); return; }
+    showHoverUI(section);
   });
   document.addEventListener('mouseout', (e) => {
     const next = e.relatedTarget;
     if (!next) { hideHoverUI(); return; }
-    // Stay shown if cursor moves into the pill or outline.
-    if (next.closest && (next.closest('.tdoc-comment-pill') || next.closest('.tdoc-hover-outline'))) return;
-    // Stay shown if cursor moves to the same artifact (mouseover children).
-    if (pillTargetEl && next.closest) {
-      const nextLeaf = next.closest(COMMENTABLE);
-      if (nextLeaf && resolveArtifact(nextLeaf) === pillTargetEl) return;
-    }
+    // Stay shown if cursor moves into the Comment button.
+    if (next.closest && next.closest('.tdoc-comment-pill')) return;
+    // Stay shown while the cursor remains anywhere inside the SAME section.
+    if (pillTargetEl && pillTargetEl.contains && pillTargetEl.contains(next)) return;
+    if (pillTargetEl && artifactSectionOf(next) === pillTargetEl) return;
     if (isInUI(next)) hideHoverUI();
   });
 
