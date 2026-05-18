@@ -2,11 +2,7 @@
 
 See it live: https://tdoc.serenatan.workers.dev
 
-
-
-https://github.com/user-attachments/assets/38e24f66-4c81-42c0-8862-db319f8c20ad
-
-
+https://github.com/user-attachments/assets/872957b6-34bd-4c67-a3fa-3911ebd09d09
 
 <img width="1149" height="603" alt="Screenshot 2026-05-13 at 00 21 01" src="https://github.com/user-attachments/assets/f89b12fa-6661-49b6-b9eb-dc0677e3cf1b" />
 
