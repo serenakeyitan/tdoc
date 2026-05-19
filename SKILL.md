@@ -411,25 +411,42 @@ The overlay applies these as `:where()` defensive defaults so old docs degrade g
 
 ### Comment anchor stability (important for `/tdoc edit`)
 
-When a user comments on an artifact, the comment stores a CSS selector for that element (built from the element's id if present, otherwise its tag + nth-of-type path). For comments to **survive `/tdoc edit` regenerations**, anchored elements should have **stable selectors across versions**:
+When a user comments on an artifact, the comment stores a CSS selector for that element (built from the element's id if present, otherwise its tag + nth-of-type path) **plus a content fingerprint** (tag + normalized text + child structure + viewBox/src). The overlay resolves element anchors fingerprint-first: if the stored selector now lands on a *different* artifact, the comment goes **unanchored** rather than silently pointing at the wrong thing. For comments to **stay correctly anchored across `/tdoc edit` regenerations**, follow these rules — they are **mandatory**, not advisory:
 
-- **Give every commentable artifact a deterministic `id`** (e.g. `<canvas id="life">`, `<svg id="diagram-a">`, `<img id="hero">`). The selector becomes `#life`, immune to reordering.
-- **Don't change ids between versions** unless the artifact's purpose has changed.
-- **Don't add/remove sibling elements** of similar tags above an unidentified artifact — that shifts its nth-of-type.
-- When you DO change an anchored element semantically, accept that its comments may become "unanchored" — they'll still render in the margin under an "unanchored" header so they're not lost.
+- **MANDATORY: every artifact that has an open element-anchored comment MUST keep a stable, unchanged `id` in the regenerated HTML.** Before regenerating, read `comments.json`, list each `kind:"element"` comment's `anchor.selector`, find that artifact in the current HTML, and ensure the regenerated artifact has the **same `id`** on the **same element** (the element the selector points at — not a new wrapper around it).
+- **NEVER wrap an anchored artifact in a new parent** (e.g. putting an `<svg>` inside a new `<figure>`) or add/remove sibling elements of the same tag above it. Both shift `nth-of-type` and break the positional selector. If the artifact had no `id`, **add one** and keep the element at the same DOM position/depth.
+- **Don't change an anchored element's `id`** between versions unless its purpose genuinely changed.
+- **POST-EDIT VERIFICATION (required):** after writing `v<n+1>`, for every element-anchored open comment, confirm `document.querySelector(anchor.selector)` would resolve to the intended artifact in the new HTML (check the selector path by hand against the new DOM). If a selector no longer resolves to the right element, **fix the new HTML** (add/restore the id, un-nest the wrapper) — do not ship a version that silently re-points a comment at a different artifact. Report any anchor you intentionally let go unanchored in the agent reply.
+- When you intentionally change an anchored element semantically, it's fine for the comment to become "unanchored" — it still renders in the margin under an "unanchored" header so it's not lost. That's the *correct* failure mode; pointing at the wrong artifact is the bug.
 
 ## Comment anchoring
 
-Comments are persisted with:
+Comments are persisted with one of two anchor shapes:
+
 ```json
-{
-  "id": "c_<timestamp>",
-  "version": 1,
-  "anchor": { "text": "exact highlighted text", "context_before": "...", "context_after": "..." },
-  "text": "what the user wrote",
-  "status": "open",
-  "created": "<iso>"
-}
+// text anchor
+{ "id": "c_<ts>", "version": 1, "text": "what the user wrote",
+  "status": "open", "created": "<iso>",
+  "anchor": { "kind": "text", "text": "exact highlighted text",
+              "context_before": "...", "context_after": "..." } }
+
+// element (artifact) anchor
+{ "id": "c_<ts>", "version": 1, "text": "what the user wrote",
+  "status": "open", "created": "<iso>",
+  "anchor": { "kind": "element",
+              "selector": "#diagram-a",          // or a positional path
+              "label": "svg",
+              "fingerprint": { "tag": "svg", "text": "...", "kids": "...",
+                               "meta": "viewBox|src|label", "h": "<hash>" } } }
 ```
 
-When regenerating, find the anchor text in the current HTML and apply the requested change to that region. If the anchor no longer exists (because a prior version removed it), apply the comment as a general directive.
+**Text anchors:** find the anchor text in the current HTML and apply the
+change to that region. If the text no longer exists, apply as a general
+directive.
+
+**Element anchors:** the `fingerprint` is how the overlay re-attaches a
+comment after the DOM is restructured. When regenerating, keep the
+anchored artifact's `id` and element identity stable (see *Comment anchor
+stability* above) so the fingerprint still matches. If you must change the
+artifact, the comment correctly goes *unanchored* — never let a positional
+selector silently slide onto a different artifact.

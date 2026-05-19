@@ -1012,7 +1012,39 @@
   }
   function findElement(anchor) {
     if (!anchor || !anchor.selector) return null;
-    try { return document.querySelector(anchor.selector); } catch { return null; }
+    let bySelector = null;
+    try { bySelector = document.querySelector(anchor.selector); } catch { bySelector = null; }
+
+    const fp = anchor.fingerprint;
+    // Legacy comments (made before fingerprinting) have no fp — keep the
+    // old behavior so they don't all suddenly unanchor.
+    if (!fp) return bySelector;
+
+    // 1. If the stored selector still lands on the SAME artifact, trust it.
+    if (bySelector && fingerprintScore(fp, elementFingerprint(bySelector)) >= 0.6) {
+      return bySelector;
+    }
+
+    // 2. Selector drifted (or matched the wrong artifact). Scan every
+    //    element of the same tag and pick the best fingerprint match.
+    let best = null, bestScore = 0;
+    const tag = fp.tag || '*';
+    let candidates;
+    try { candidates = document.querySelectorAll(tag); } catch { candidates = []; }
+    candidates.forEach(el => {
+      if (el.closest && el.closest(UI_ALL)) return; // skip overlay chrome
+      const sc = fingerprintScore(fp, elementFingerprint(el));
+      if (sc > bestScore) { bestScore = sc; best = el; }
+    });
+    // Confident re-match → use it. Otherwise treat as UNANCHORED (return
+    // null) rather than silently pointing at a different artifact — the
+    // exact bug this fix exists to kill.
+    if (best && bestScore >= 0.6) return best;
+
+    // 3. Last resort: if the selector matched something of the right tag
+    //    but we couldn't fingerprint-confirm (e.g. doc regenerated with
+    //    different text), prefer NOTHING over the wrong artifact.
+    return null;
   }
 
   // Fallback span path — only used when CSS.highlights is unavailable AND the
@@ -1829,7 +1861,11 @@
       const fallback = captureFallbackPosition(anchor);
       const sendAnchor = anchor.kind === 'text'
         ? { kind: 'text', text: anchor.text, context_before: anchor.context_before, context_after: anchor.context_after, fallback }
-        : { kind: 'element', selector: anchor.selector, label: anchor.label, fallback };
+        : { kind: 'element', selector: anchor.selector, label: anchor.label,
+            // Content fingerprint so the anchor survives DOM restructuring
+            // across /tdoc edit regenerations (positional selectors drift).
+            fingerprint: anchor._el ? elementFingerprint(anchor._el) : null,
+            fallback };
       const r = await fetch('/api/comments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slug, version, anchor: sendAnchor, text })
@@ -2129,6 +2165,66 @@
   }
   function elementLabel(el) {
     return el.getAttribute('alt') || el.getAttribute('aria-label') || el.getAttribute('title') || el.tagName.toLowerCase();
+  }
+
+  // ── Anchor stability for ELEMENT (artifact) comments ──────────────────
+  // Positional selectors like `div > svg:nth-of-type(1)` silently drift to
+  // a DIFFERENT artifact when /tdoc edit restructures the DOM (e.g. wraps
+  // an svg in a <figure>, or adds a sibling). To make element anchors
+  // survive regeneration we capture a CONTENT FINGERPRINT at comment time
+  // and validate it at resolve time — if the selector lands on something
+  // that isn't the same artifact, we treat the comment as unanchored
+  // instead of pointing it at the wrong thing.
+  function elementFingerprint(el) {
+    if (!el || el.nodeType !== 1) return null;
+    // Normalized, length-capped text content (collapses whitespace).
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    // Structural signature: ordered child tag names (one level) + svg/img
+    // intrinsics, so two same-tag artifacts with different innards differ.
+    const kids = Array.from(el.children).map(c => c.tagName.toLowerCase()).join(',');
+    const dims = [
+      el.getAttribute('viewBox') || '',
+      el.getAttribute('src') || '',
+      el.getAttribute('alt') || el.getAttribute('aria-label') || '',
+    ].join('|');
+    return {
+      tag: el.tagName.toLowerCase(),
+      text: txt,
+      kids,
+      meta: dims,
+      // cheap stable hash so we can compare without storing huge strings
+      h: cyrb53(el.tagName + '' + txt + '' + kids + '' + dims),
+    };
+  }
+  // Small, fast 53-bit string hash (public-domain cyrb53).
+  function cyrb53(str, seed = 0) {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0, ch; i < str.length; i++) {
+      ch = str.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  }
+  // How well do two fingerprints match? 1 = identical artifact, 0 = no
+  // relation. Tag mismatch is disqualifying. Otherwise weight exact-hash,
+  // then text similarity, then structural (kids) similarity.
+  function fingerprintScore(a, b) {
+    if (!a || !b || a.tag !== b.tag) return 0;
+    if (a.h === b.h) return 1;
+    let s = 0;
+    if (a.meta && a.meta === b.meta) s += 0.45;       // same viewBox/src/label
+    if (a.kids && a.kids === b.kids) s += 0.25;        // same child structure
+    if (a.text && b.text) {
+      // token Jaccard on the normalized text
+      const A = new Set(a.text.split(' ')), B = new Set(b.text.split(' '));
+      let inter = 0; A.forEach(t => { if (B.has(t)) inter++; });
+      const uni = A.size + B.size - inter;
+      if (uni) s += 0.30 * (inter / uni);
+    }
+    return s;
   }
 
   document.addEventListener('mousedown', (e) => {
