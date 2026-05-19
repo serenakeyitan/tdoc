@@ -13,5 +13,9 @@ id = "PLACEHOLDER_KV_ID"
 
 [vars]
 GITHUB_CLIENT_ID = "Ov23liZ1UAGOchvKPmlS"
+# The worker owner's GitHub login. Only this signed-in viewer sees the
+# "My docs" catalog (profile chip → My docs). Empty = catalog stays fully
+# private (no one can enumerate docs; they're reachable only by direct link).
+TDOC_OWNER = "PLACEHOLDER_OWNER"
 
 # Secret: TDOC_UPLOAD_TOKEN — set via `wrangler secret put TDOC_UPLOAD_TOKEN`

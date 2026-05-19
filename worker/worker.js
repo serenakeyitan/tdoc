@@ -55,6 +55,15 @@ async function getSession(env, req) {
     return { id: sid, ...data };
   } catch { return null; }
 }
+// The worker owner = the GitHub login configured in TDOC_OWNER at deploy.
+// Only that signed-in viewer may see the catalog of hosted docs. Case-
+// insensitive; if TDOC_OWNER is unset, nobody is owner (catalog stays
+// fully private — safe default).
+function isOwnerSession(env, session) {
+  const owner = (env.TDOC_OWNER || '').trim().toLowerCase();
+  if (!owner || !session || !session.login) return false;
+  return session.login.toLowerCase() === owner;
+}
 function rand(n) {
   const a = new Uint8Array(n);
   crypto.getRandomValues(a);
@@ -67,10 +76,11 @@ function safeJsonForScript(obj) {
   return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
 }
 
-function injectOverlay(rawHtml, slug, version, identity, versions) {
+function injectOverlay(rawHtml, slug, version, identity, versions, isOwner) {
   const cfg = {
     slug, version,
     identity: identity || null,
+    isOwner: !!isOwner,
     authConfigured: true,
     mode: 'published',
     versions: Array.isArray(versions) && versions.length ? versions : [{ n: version }],
@@ -82,7 +92,30 @@ function injectOverlay(rawHtml, slug, version, identity, versions) {
   return rawHtml + inject;
 }
 
-async function indexHtml(env) {
+// Neutral landing page served at `/`. No catalog, no slug list — just
+// brand + a link to the open-source project. Docs are link-only.
+function landingHtml() {
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tdoc</title>
+<style>
+  body { font: 15px system-ui, -apple-system, sans-serif; min-height: 100vh;
+    margin: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; color: #111; background: #fff; gap: 10px; }
+  h1 { font-size: 30px; margin: 0; color: #1652f0; }
+  p { color: #666; margin: 0; }
+  a { color: #1652f0; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .sub { margin-top: 14px; font-size: 13px; color: #888; }
+</style></head><body>
+  <h1>tdoc</h1>
+  <p>Prompt-native, commentable documents.</p>
+  <p class="sub">Open a document from its shared link ·
+    <a href="https://github.com/serenakeyitan/tdoc">github.com/serenakeyitan/tdoc</a></p>
+</body></html>`;
+}
+
+async function indexHtml(env, session) {
   // List all `meta:` keys.
   let list = [];
   let cursor;
@@ -123,8 +156,11 @@ async function indexHtml(env) {
   a { color: #1652f0; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .empty { color: #888; padding: 40px 0; text-align: center; }
+  .who { color: #888; font-size: 13px; margin: 0 0 32px; }
+  .who b { color: #444; font-weight: 600; }
 </style></head><body>
-<h1>tdoc</h1><p class="sub">Published prompt-native documents.</p>
+<h1>My docs</h1>
+<p class="who">Documents hosted on this worker${session && session.login ? ` · signed in as <b>${String(session.login).replace(/</g, '&lt;')}</b>` : ''}.</p>
 ${rows.length === 0 ? '<p class="empty">No published docs yet.</p>' :
   `<table><thead><tr><th>Title</th><th>Slug</th><th>Version</th></tr></thead><tbody>${rows.join('')}</tbody></table>`}
 </body></html>`;
@@ -206,8 +242,25 @@ export default {
 
     if (p === '/api/ping') return json({ ok: true });
 
-    // ---- index ----
-    if (p === '/' && method === 'GET') return html(await indexHtml(env));
+    // ---- landing (NO public catalog) ----
+    // `/` never lists docs. Docs are only reachable via their direct link.
+    // A neutral branded page points at the open-source project.
+    if (p === '/' && method === 'GET') return html(landingHtml());
+
+    // ---- owner-only doc catalog ----
+    // `/me` returns the list of every doc hosted on THIS worker, but only
+    // to the configured owner (TDOC_OWNER) when signed in. Everyone else
+    // gets redirected to the GitHub repo — no slug enumeration.
+    if (p === '/me' && method === 'GET') {
+      const s = await getSession(env, req);
+      if (!isOwnerSession(env, s)) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://github.com/serenakeyitan/tdoc' },
+        });
+      }
+      return html(await indexHtml(env, s));
+    }
 
     // ---- doc view ----
     const docMatch = p.match(/^\/d\/([^/]+)\/v\/(\d+)\/?$/);
@@ -228,7 +281,7 @@ export default {
           if (Array.isArray(meta.versions)) versions = meta.versions.map(v => ({ n: v.n, created: v.created || null }));
         }
       } catch {}
-      return html(injectOverlay(raw, slug, Number(vStr), identity, versions));
+      return html(injectOverlay(raw, slug, Number(vStr), identity, versions, isOwnerSession(env, session)));
     }
 
     // ---- doc export / fork ----
@@ -343,6 +396,7 @@ export default {
       const s = await getSession(env, req);
       return json({
         identity: s ? { login: s.login, avatar_url: s.avatar_url, name: s.name } : null,
+        isOwner: isOwnerSession(env, s),
         authConfigured: true,
       });
     }

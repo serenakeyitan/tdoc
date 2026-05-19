@@ -180,8 +180,20 @@ first_time_setup() {
 
   # 6. write wrangler.toml
   local worker_name="tdoc"
+  # Detect the owner's GitHub login so only they see the "My docs" catalog.
+  # Best-effort via gh CLI; empty = catalog stays fully private (link-only).
+  local owner_login=""
+  if command -v gh >/dev/null 2>&1; then
+    owner_login="$(gh api user --jq .login 2>/dev/null || true)"
+  fi
+  if [ -n "$owner_login" ]; then
+    echo "[tdoc] worker owner (will see 'My docs'): $owner_login"
+  else
+    echo "[tdoc] no GitHub login detected — doc catalog stays private (link-only)."
+  fi
   sed \
     -e "s/PLACEHOLDER_KV_ID/${kv_id}/g" \
+    -e "s/PLACEHOLDER_OWNER/${owner_login}/g" \
     "$WORKER_DIR/wrangler.toml.template" > "$WORKER_DIR/wrangler.toml"
 
   # 7. bundle + deploy
@@ -245,6 +257,25 @@ if [ "${TDOC_SKIP_WORKER_DEPLOY:-0}" != "1" ]; then
     || [ "$SKILL_DIR/server/overlay.js" -nt "$BUNDLED" ] \
     || [ "$SKILL_DIR/worker/worker.js" -nt "$BUNDLED" ]; then
     echo "[tdoc] worker code changed locally — redeploying..."
+    # Backfill TDOC_OWNER into an existing wrangler.toml that predates the
+    # owner-only catalog feature, so redeploys don't lose the setting.
+    if [ -f "$WORKER_DIR/wrangler.toml" ] \
+      && ! grep -q '^TDOC_OWNER' "$WORKER_DIR/wrangler.toml"; then
+      _ol=""
+      command -v gh >/dev/null 2>&1 && _ol="$(gh api user --jq .login 2>/dev/null || true)"
+      if grep -q '^\[vars\]' "$WORKER_DIR/wrangler.toml"; then
+        # insert right after the [vars] header
+        awk -v ol="$_ol" '
+          {print}
+          /^\[vars\]/ && !done {print "TDOC_OWNER = \"" ol "\""; done=1}
+        ' "$WORKER_DIR/wrangler.toml" > "$WORKER_DIR/wrangler.toml.tmp" \
+          && mv "$WORKER_DIR/wrangler.toml.tmp" "$WORKER_DIR/wrangler.toml"
+      else
+        printf '\n[vars]\nTDOC_OWNER = "%s"\n' "$_ol" >> "$WORKER_DIR/wrangler.toml"
+      fi
+      [ -n "$_ol" ] && echo "[tdoc] backfilled TDOC_OWNER=$_ol into wrangler.toml" \
+        || echo "[tdoc] TDOC_OWNER left empty (catalog stays private)."
+    fi
     SKILL_DIR="$SKILL_DIR" bundle_worker
     (cd "$WORKER_DIR" && wrangler deploy)
   fi

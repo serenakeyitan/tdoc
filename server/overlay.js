@@ -29,6 +29,7 @@
   // embedded #tdoc-fork-comments JSON. No /api calls, no auth, no publish.
   // The original published slug is in cfg.originalSlug so we can label it.
   let identity = cfg.identity || null;
+  let isOwner = !!cfg.isOwner; // true only for the configured TDOC_OWNER
   if (!slug) return;
 
   const HIGHLIGHT_API = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function';
@@ -524,7 +525,7 @@
 
   // Left group: workspace mark + slug crumb + version picker.
   const leftHtml = `
-    <button class="tdoc-bar-mark" id="tdoc-bar-mark" title="All docs" aria-label="All docs">tdoc</button>
+    <button class="tdoc-bar-mark" id="tdoc-bar-mark" title="tdoc on GitHub" aria-label="tdoc on GitHub">tdoc</button>
     <span class="crumb crumb-slug" title="${escapeHtml(slugCrumbLabel)}">${escapeHtml(slugCrumbLabel)}</span>
     <span class="crumb-sep crumb-sep-slug" aria-hidden="true">/</span>
     <div class="tdoc-version-wrap">
@@ -577,7 +578,7 @@
         ${isPublished ? '<button data-action="share">Share</button><button data-action="fork">Fork</button>' : ''}
         ${isLocal ? '<button data-action="publish">Publish</button>' : ''}
         ${isFork ? '<button data-action="saveas">Save copy</button>' : ''}
-        <button data-action="home">All docs</button>
+        <button data-action="repo">tdoc on GitHub</button>
       </div>
     </div>
     <span id="tdoc-identity-slot"></span>`;
@@ -604,8 +605,11 @@
   const titleEl = document.querySelector('title');
   if (titleEl && titleEl.textContent) document.getElementById('tdoc-title').textContent = titleEl.textContent;
 
-  // Workspace mark in the bar's left → "all docs" home.
-  document.getElementById('tdoc-bar-mark').onclick = () => location.href = '/';
+  // Workspace mark in the bar's left → the open-source project. There is
+  // no public catalog; the owner reaches their doc list via the profile
+  // chip menu instead.
+  document.getElementById('tdoc-bar-mark').onclick = () =>
+    window.open('https://github.com/serenakeyitan/tdoc', '_blank', 'noopener');
 
   // Fork: opens the renderable /fork view in a new tab AND triggers a download
   // (one click, both happen). We use a hidden iframe to fire the download so
@@ -709,7 +713,7 @@
     b.onclick = (e) => {
       e.stopPropagation();
       secMenu.classList.remove('open');
-      if (b.dataset.action === 'home') location.href = '/';
+      if (b.dataset.action === 'repo') window.open('https://github.com/serenakeyitan/tdoc', '_blank', 'noopener');
       if (b.dataset.action === 'fork') forkAndDownload();
       if (b.dataset.action === 'share') showShareModal();
       if (b.dataset.action === 'publish') showPublishModal();
@@ -721,14 +725,36 @@
     const slot = document.getElementById('tdoc-identity-slot');
     if (!isPublished) { slot.innerHTML = ''; return; }
     if (identity) {
-      slot.innerHTML = `<button class="tdoc-chip" id="tdoc-me"><img src="${identity.avatar_url}" alt=""><span class="name">${escapeHtml(identity.login)}</span></button>`;
-      document.getElementById('tdoc-me').onclick = async () => {
-        if (confirm(`Sign out ${identity.login}?`)) {
-          await fetch('/api/auth/logout', { method: 'POST' });
-          identity = null;
-          renderIdentity();
-          refreshComments();
-        }
+      // Profile chip → dropdown. "My docs" is owner-only (the configured
+      // TDOC_OWNER); everyone signed in still gets Sign out.
+      slot.innerHTML =
+        `<div class="tdoc-menu-wrap">
+          <button class="tdoc-chip" id="tdoc-me" aria-haspopup="menu" aria-expanded="false">
+            <img src="${identity.avatar_url}" alt=""><span class="name">${escapeHtml(identity.login)}</span>
+          </button>
+          <div class="tdoc-menu" id="tdoc-me-menu" role="menu">
+            ${isOwner ? `<button id="tdoc-my-docs" role="menuitem">My docs</button>` : ''}
+            <button id="tdoc-signout" role="menuitem">Sign out</button>
+          </div>
+        </div>`;
+      const meBtn = document.getElementById('tdoc-me');
+      const meMenu = document.getElementById('tdoc-me-menu');
+      meBtn.onclick = (e) => {
+        e.stopPropagation();
+        const open = meMenu.classList.toggle('open');
+        meBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      if (isOwner) {
+        document.getElementById('tdoc-my-docs').onclick = () => {
+          window.open('/me', '_blank', 'noopener');
+        };
+      }
+      document.getElementById('tdoc-signout').onclick = async () => {
+        await fetch('/api/auth/logout', { method: 'POST' });
+        identity = null;
+        isOwner = false;
+        renderIdentity();
+        refreshComments();
       };
     } else {
       slot.innerHTML = `<button class="tdoc-chip signin" id="tdoc-signin">Sign in with GitHub</button>`;
@@ -2361,6 +2387,13 @@
     // Close menus that aren't under the cursor
     if (!t.closest('#tdoc-more-btn') && !t.closest('#tdoc-secondary-menu')) secMenu.classList.remove('open');
     if (!t.closest('.tdoc-menu-wrap')) copyMenu.classList.remove('open');
+    // Close the profile menu on any click outside its wrapper.
+    if (!t.closest('#tdoc-me') && !t.closest('#tdoc-me-menu')) {
+      const mm = document.getElementById('tdoc-me-menu');
+      const mb = document.getElementById('tdoc-me');
+      if (mm) mm.classList.remove('open');
+      if (mb) mb.setAttribute('aria-expanded', 'false');
+    }
     if (!t.closest('.tdoc-version-wrap')) {
       const vm = document.getElementById('tdoc-version-menu');
       const vt = document.getElementById('tdoc-version-toggle');
