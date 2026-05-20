@@ -838,7 +838,8 @@ export default {
       if (unauth) return unauth;
       let body = {};
       try { body = await req.json(); } catch {}
-      const { slug, parent_id, text: replyText, status: agentStatus, applied_in } = body;
+      const { slug, parent_id, text: replyText, status: agentStatus, applied_in,
+              bind_anchor_aid } = body;
       if (!slug || !parent_id || !replyText) return json({ error: 'slug, parent_id, text required' }, { status: 400 });
       const raw = await env.META.get(`comments:${slug}`);
       const list = raw ? JSON.parse(raw) : [];
@@ -860,6 +861,26 @@ export default {
         if (applied_in) parent.applied_in = applied_in;
       } else if (agentStatus === 'question' || agentStatus === 'partial') {
         parent.status = 'open';
+      }
+      // OPTIONAL: when the agent resolves a comment, it can also BIND the
+      // anchor to a specific artifact aid. This is the right behavior when
+      // a user-created comment lacks an element anchor (e.g. kind:"none"
+      // because the click missed the artifact) but the comment text clearly
+      // references "this artifact" and the agent has identified the target.
+      // Without this, agent replies could only resolve status; rebinding
+      // required the original author's session, which is impossible from
+      // a CI / agent context.
+      if (bind_anchor_aid && typeof bind_anchor_aid === 'string') {
+        if (!parent.anchor) parent.anchor = {};
+        // preserve fallback if present
+        const fallback = parent.anchor.fallback;
+        parent.anchor = {
+          kind: 'element',
+          aid: bind_anchor_aid,
+          selector: `[data-tdoc-aid="${bind_anchor_aid}"]`,
+          label: parent.anchor.label || 'svg',
+          ...(fallback ? { fallback } : {}),
+        };
       }
       setAgentReaction(parent, agentStatus);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
