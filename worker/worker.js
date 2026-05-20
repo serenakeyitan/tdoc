@@ -143,7 +143,9 @@ function stampAids(rawHtml) {
   }
   function nearestHeadingAt(idx) {
     let best = null;
-    for (const h of headings) { if (h.end < idx) best = h.text; else break; }
+    // Use <= so a heading whose close tag ends exactly at the next
+    // element's open (no whitespace between) is still "before" it.
+    for (const h of headings) { if (h.end <= idx) best = h.text; else break; }
     return best;
   }
   // Find every open tag of every stampable kind in document order.
@@ -219,15 +221,33 @@ function reconcileAnchors(comments, aidsInVersion) {
   if (!Array.isArray(comments)) return comments;
   const byAid = new Map(aidsInVersion.map(a => [a.aid, a]));
   for (const c of comments) {
-    if (!c || !c.anchor || c.anchor.kind !== 'element') continue;
-    if (c.status === 'applied') continue; // resolved comments don't re-anchor
+    if (!c || !c.anchor) continue;
+    // `lost` is a per-version verdict, not permanent. Re-evaluate on each
+    // publish so an artifact restored or re-stamped in a later version
+    // can rebind a previously-lost comment.
+    if (c.anchor.kind === 'lost') { c.anchor.kind = 'element'; delete c.anchor.reason; }
+    if (c.anchor.kind !== 'element') continue;
+    // NB: previously we skipped `status:"applied"` here on the theory that
+    // resolved comments don't re-anchor. But applied comments are STILL
+    // rendered on the page (with their ✅ verdict) — and they still need
+    // to point at the right artifact. A legacy applied comment with an
+    // un-bound positional selector will display on the WRONG artifact
+    // forever otherwise. So we reconcile applied comments too: bind their
+    // aid if we can identify the artifact unambiguously; mark lost if not.
     const a = c.anchor;
-    // 1. Already aid-anchored → trust it, mark lost if the aid vanished.
+    // 1. Already aid-anchored → trust it if the aid is still in the doc.
+    //    If the aid is STALE (from a prior version), clear it and fall
+    //    through to the heading/tag-based re-resolution — we may still be
+    //    able to identify the artifact the user meant, and "stale aid"
+    //    should never lock a comment to "lost" forever.
     const knownAid = a.aid
       || (a.selector && /\[data-tdoc-aid="([\w]+)"\]/.exec(a.selector || '')?.[1]);
     if (knownAid) {
-      if (!byAid.has(knownAid)) { a.kind = 'lost'; a.reason = 'aid not found in version'; }
-      continue;
+      if (byAid.has(knownAid)) continue;       // valid → done
+      // Stale aid: clear it and let the heading/tag matcher try again.
+      delete a.aid;
+      a.kind = 'element';                       // un-lose so we can retry
+      delete a.reason;
     }
     // 2. Has a fingerprint — find the aid whose inventory matches the
     //    artifact tag + heading hint best.
