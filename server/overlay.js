@@ -1011,39 +1011,60 @@
     return i;
   }
   function findElement(anchor) {
-    if (!anchor || !anchor.selector) return null;
-    let bySelector = null;
-    try { bySelector = document.querySelector(anchor.selector); } catch { bySelector = null; }
+    if (!anchor) return null;
+    // Server-side reconciliation may have marked the anchor as lost — the
+    // artifact is gone in this version. Render unanchored, never guess.
+    if (anchor.kind === 'lost') return null;
 
-    const fp = anchor.fingerprint;
-    // Legacy comments (made before fingerprinting) have no fp — keep the
-    // old behavior so they don't all suddenly unanchor.
-    if (!fp) return bySelector;
-
-    // 1. If the stored selector still lands on the SAME artifact, trust it.
-    if (bySelector && fingerprintScore(fp, elementFingerprint(bySelector)) >= 0.6) {
-      return bySelector;
+    // 1. IDENTITY-FIRST: anchor.aid is the artifact's content-derived id
+    //    stamped by the worker. Same artifact across versions = same aid.
+    //    A direct hit here is unambiguous and cannot drift.
+    const aid = anchor.aid
+      || (anchor.selector && (/\[data-tdoc-aid="([^"]+)"\]/.exec(anchor.selector) || [])[1]);
+    if (aid) {
+      const byAid = document.querySelector(`[data-tdoc-aid="${aid}"]`);
+      if (byAid) return byAid;
+      // aid recorded but missing in this DOM → unanchored, never fallback.
+      return null;
     }
 
-    // 2. Selector drifted (or matched the wrong artifact). Scan every
-    //    element of the same tag and pick the best fingerprint match.
-    let best = null, bestScore = 0;
-    const tag = fp.tag || '*';
-    let candidates;
-    try { candidates = document.querySelectorAll(tag); } catch { candidates = []; }
-    candidates.forEach(el => {
-      if (el.closest && el.closest(UI_ALL)) return; // skip overlay chrome
-      const sc = fingerprintScore(fp, elementFingerprint(el));
-      if (sc > bestScore) { bestScore = sc; best = el; }
-    });
-    // Confident re-match → use it. Otherwise treat as UNANCHORED (return
-    // null) rather than silently pointing at a different artifact — the
-    // exact bug this fix exists to kill.
-    if (best && bestScore >= 0.6) return best;
+    // 2. LEGACY PATH (pre-aid comments): try the stored selector, but
+    //    NEVER trust the result without fingerprint validation. A bare
+    //    positional selector can silently point at a different artifact.
+    let bySelector = null;
+    if (anchor.selector) {
+      try { bySelector = document.querySelector(anchor.selector); } catch { bySelector = null; }
+    }
+    const fp = anchor.fingerprint;
 
-    // 3. Last resort: if the selector matched something of the right tag
-    //    but we couldn't fingerprint-confirm (e.g. doc regenerated with
-    //    different text), prefer NOTHING over the wrong artifact.
+    // 2a. Has fingerprint: trust selector ONLY if it matches the fp,
+    //     otherwise scan all candidates.
+    if (fp) {
+      if (bySelector && fingerprintScore(fp, elementFingerprint(bySelector)) >= 0.6) {
+        return bySelector;
+      }
+      let best = null, bestScore = 0;
+      const tag = fp.tag || '*';
+      let cands;
+      try { cands = document.querySelectorAll(tag); } catch { cands = []; }
+      cands.forEach(el => {
+        if (el.closest && el.closest(UI_ALL)) return;
+        const sc = fingerprintScore(fp, elementFingerprint(el));
+        if (sc > bestScore) { bestScore = sc; best = el; }
+      });
+      if (best && bestScore >= 0.6) return best;
+      // No confident match → unanchored, never the wrong artifact.
+      return null;
+    }
+
+    // 2b. No fingerprint AND no aid (truly legacy). Validate the selector
+    //     match against the stored `label` (the artifact's tag). If the
+    //     tag matches, accept it — but this path is fragile and the
+    //     server-side reconciliation should convert these to aid anchors
+    //     on the next upload, after which we never hit this branch again.
+    if (bySelector && (!anchor.label || bySelector.tagName.toLowerCase() === anchor.label.toLowerCase())) {
+      return bySelector;
+    }
     return null;
   }
 
@@ -1862,8 +1883,11 @@
       const sendAnchor = anchor.kind === 'text'
         ? { kind: 'text', text: anchor.text, context_before: anchor.context_before, context_after: anchor.context_after, fallback }
         : { kind: 'element', selector: anchor.selector, label: anchor.label,
-            // Content fingerprint so the anchor survives DOM restructuring
-            // across /tdoc edit regenerations (positional selectors drift).
+            // IDENTITY-FIRST: persist the worker-stamped artifact id so
+            // future resolution is by content identity, not DOM position.
+            // Same artifact in any future version = same aid.
+            aid: anchor._el ? elementAid(anchor._el) : null,
+            // Fingerprint is the legacy fallback for any pre-aid docs.
             fingerprint: anchor._el ? elementFingerprint(anchor._el) : null,
             fallback };
       const r = await fetch('/api/comments', {
@@ -2147,7 +2171,14 @@
     return null;
   }
   function elementSelector(el) {
+    // IDENTITY FIRST: prefer the worker-stamped artifact id (immune to
+    // DOM restructuring — same artifact in a different version has the
+    // same aid).
+    const aid = el.getAttribute && el.getAttribute('data-tdoc-aid');
+    if (aid) return `[data-tdoc-aid="${aid}"]`;
     if (el.id) return `#${CSS.escape(el.id)}`;
+    // Last-resort positional path (used only for previews before the doc
+    // is published — after publish, every artifact has an aid).
     const parts = [];
     let cur = el;
     while (cur && cur.nodeType === 1 && cur !== document.body) {
@@ -2162,6 +2193,9 @@
       cur = parent;
     }
     return parts.join(' > ');
+  }
+  function elementAid(el) {
+    return (el && el.getAttribute && el.getAttribute('data-tdoc-aid')) || null;
   }
   function elementLabel(el) {
     return el.getAttribute('alt') || el.getAttribute('aria-label') || el.getAttribute('title') || el.tagName.toLowerCase();

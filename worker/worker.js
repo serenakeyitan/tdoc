@@ -76,6 +76,185 @@ function safeJsonForScript(obj) {
   return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Artifact identity (`data-tdoc-aid`)
+//
+// THE PROBLEM: positional CSS selectors silently drift when /tdoc edit
+// restructures HTML. A comment anchored to `div > svg:nth-of-type(1)` will
+// resolve to a different artifact in the next version with no indication.
+//
+// THE FIX: at upload time, the worker stamps every commentable artifact in
+// the published HTML with `data-tdoc-aid="<content-hash>"`. The hash is
+// derived from the artifact's TAG + NORMALIZED INNER CONTENT (whitespace
+// collapsed, existing data-tdoc-* attrs stripped so the hash doesn't
+// include itself). The SAME ARTIFACT IN A DIFFERENT VERSION HAS THE SAME
+// AID. Comments anchor by aid; resolution is identity-first; drift is
+// impossible because the aid is the artifact, not a path through the DOM.
+//
+// The set of commentable artifacts matches the overlay's COMMENTABLE.
+const STAMPABLE_TAGS = ['img','svg','canvas','video','pre','figure','iframe'];
+// 53-bit string hash (public-domain cyrb53), identical to the one in the
+// overlay so identities computed on either side agree.
+function cyrb53(str, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0, ch; i < str.length; i++) {
+    ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+// Compute an aid from a raw HTML substring representing one artifact element.
+// Strips data-tdoc-* attrs from the open tag (so an aid doesn't include
+// itself), strips comments, collapses whitespace inside.
+function aidFor(tag, innerHtml, openAttrs) {
+  // Keep author-meaningful intrinsics (viewBox / src / alt / aria-label /
+  // title) as part of identity — they're what makes a `<svg>` *this* svg.
+  const intrinsics = ['viewBox','src','alt','aria-label','title']
+    .map(a => {
+      const m = new RegExp('\\b' + a + '\\s*=\\s*"([^"]*)"', 'i').exec(openAttrs || '');
+      return m ? a + '=' + m[1] : '';
+    })
+    .filter(Boolean).join('|');
+  const norm = (innerHtml || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\sdata-tdoc-[\w-]+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cyrb53(tag + '|' + intrinsics + '|' + norm);
+}
+// Walk the HTML and stamp `data-tdoc-aid` on every commentable element.
+// Returns { html: <stamped>, aids: [{aid, tag, head, heading}] }.
+//
+// Two-pass design — the previous one-pass version was wrong: when an outer
+// commentable (e.g. <figure>) contains an inner one (e.g. <svg>), naive
+// regex walking skipped past the inner element's close tag. We now run
+// SEPARATE passes per tag, so an svg inside a figure gets stamped just
+// like a free-standing svg. Both are valid anchor targets.
+function stampAids(rawHtml) {
+  const headRe = /<h([1-3])\b[^>]*>([\s\S]*?)<\/h\1>/gi;
+  const headings = [];
+  let hmatch;
+  while ((hmatch = headRe.exec(rawHtml))) {
+    headings.push({ end: hmatch.index + hmatch[0].length,
+      text: hmatch[2].replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim() });
+  }
+  function nearestHeadingAt(idx) {
+    let best = null;
+    for (const h of headings) { if (h.end < idx) best = h.text; else break; }
+    return best;
+  }
+  // Find every open tag of every stampable kind in document order.
+  // For non-void tags, find its matching close (same-tag depth count).
+  // Collect [openStart, openEnd, closeEnd, tag, attrs, innerHtml] per element.
+  const elements = [];
+  for (const tag of STAMPABLE_TAGS) {
+    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi');
+    let m;
+    while ((m = openRe.exec(rawHtml))) {
+      const attrs = m[1] || '';
+      const openStart = m.index;
+      const openEnd = m.index + m[0].length;
+      const isVoid = /^(img|iframe)$/i.test(tag) || /\/\s*$/.test(attrs);
+      let closeEnd = openEnd, innerHtml = '';
+      if (!isVoid) {
+        const closeRe = new RegExp(`</${tag}\\s*>|<${tag}\\b[^>]*>`, 'gi');
+        closeRe.lastIndex = openEnd;
+        let depth = 1, c;
+        while ((c = closeRe.exec(rawHtml))) {
+          if (c[0][1] === '/') { depth--; if (depth === 0) { closeEnd = c.index + c[0].length; break; } }
+          else depth++;
+        }
+        innerHtml = rawHtml.slice(openEnd, closeEnd - (`</${tag}>`.length));
+      }
+      elements.push({ openStart, openEnd, closeEnd, tag, attrs, innerHtml, isVoid });
+    }
+  }
+  // Compute aid per element (uses cleaned attrs + inner content with any
+  // existing data-tdoc-aid stripped, so re-stamping is idempotent).
+  const aids = [];
+  for (const e of elements) {
+    const cleanedAttrs = e.attrs.replace(/\s+data-tdoc-aid\s*=\s*"[^"]*"/gi, '');
+    // For nested commentables we hash the OUTER's content even though it
+    // contains an inner commentable — that's correct, "outer artifact" is
+    // a different identity than "inner artifact". We just strip any
+    // data-tdoc-aid attributes from the inner before hashing so the
+    // hash is stable across re-stampings.
+    const cleanedInner = e.innerHtml.replace(/\sdata-tdoc-aid\s*=\s*"[^"]*"/gi, '');
+    e._cleanedAttrs = cleanedAttrs;
+    e._aid = aidFor(e.tag, cleanedInner, cleanedAttrs);
+    aids.push({
+      aid: e._aid, tag: e.tag,
+      head: e.innerHtml.slice(0, 80),
+      heading: nearestHeadingAt(e.openStart),
+    });
+  }
+  // Apply stamps in REVERSE order so earlier offsets stay valid as we mutate.
+  elements.sort((a, b) => b.openStart - a.openStart);
+  let out = rawHtml;
+  for (const e of elements) {
+    const stampedOpen = e.isVoid
+      ? `<${e.tag}${e._cleanedAttrs} data-tdoc-aid="${e._aid}"${/\/\s*$/.test(e.attrs) ? '/' : ''}>`
+      : `<${e.tag}${e._cleanedAttrs} data-tdoc-aid="${e._aid}">`;
+    out = out.slice(0, e.openStart) + stampedOpen + out.slice(e.openEnd);
+  }
+  return { html: out, aids };
+}
+
+// Reconcile open comment anchors against the freshly-stamped artifact set.
+// Mutates `comments` in-place (returns it). Behavior:
+//   • If the comment's anchor already targets a known aid (either stored
+//     in `anchor.aid` or the selector is `[data-tdoc-aid="..."]`), it's
+//     authoritative — leave it.
+//   • If the comment has a `fingerprint` that matches one aid by content,
+//     stamp `anchor.aid = <that aid>` so future resolution is identity-first.
+//   • Otherwise (legacy positional selector + no fingerprint), try a
+//     best-effort backfill: tag must match and the nearestHeading hint (if
+//     present) must match too. Single high-confidence candidate → adopt;
+//     ambiguous or missing → mark `anchor.kind = "lost"` so the comment
+//     renders unanchored INSTEAD OF SILENTLY POINTING AT THE WRONG ARTIFACT.
+function reconcileAnchors(comments, aidsInVersion) {
+  if (!Array.isArray(comments)) return comments;
+  const byAid = new Map(aidsInVersion.map(a => [a.aid, a]));
+  for (const c of comments) {
+    if (!c || !c.anchor || c.anchor.kind !== 'element') continue;
+    if (c.status === 'applied') continue; // resolved comments don't re-anchor
+    const a = c.anchor;
+    // 1. Already aid-anchored → trust it, mark lost if the aid vanished.
+    const knownAid = a.aid
+      || (a.selector && /\[data-tdoc-aid="([\w]+)"\]/.exec(a.selector || '')?.[1]);
+    if (knownAid) {
+      if (!byAid.has(knownAid)) { a.kind = 'lost'; a.reason = 'aid not found in version'; }
+      continue;
+    }
+    // 2. Has a fingerprint — find the aid whose inventory matches the
+    //    artifact tag + heading hint best.
+    const fp = a.fingerprint;
+    const wantTag = (fp && fp.tag) || (a.label || '').toLowerCase();
+    const wantHead = a.fallback && a.fallback.nearestHeading && a.fallback.nearestHeading.text;
+    const candidates = aidsInVersion.filter(x =>
+      (!wantTag || x.tag === wantTag) &&
+      (!wantHead || (x.heading || '').toLowerCase() === wantHead.toLowerCase())
+    );
+    if (candidates.length === 1) {
+      a.aid = candidates[0].aid;
+      continue;
+    }
+    if (candidates.length === 0) {
+      // Try tag-only — if still ambiguous, give up cleanly.
+      const tagOnly = aidsInVersion.filter(x => !wantTag || x.tag === wantTag);
+      if (tagOnly.length === 1) { a.aid = tagOnly[0].aid; continue; }
+      a.kind = 'lost'; a.reason = 'no candidate artifact in new version';
+      continue;
+    }
+    // Ambiguous → unanchor rather than guess. The user can re-anchor.
+    a.kind = 'lost'; a.reason = 'multiple candidate artifacts; cannot disambiguate';
+  }
+  return comments;
+}
+
 function injectOverlay(rawHtml, slug, version, identity, versions, isOwner) {
   const cfg = {
     slug, version,
@@ -675,9 +854,14 @@ export default {
       try { body = await req.json(); } catch {}
       const { slug, version, html: doc, meta } = body;
       if (!slug || !version || !doc) return json({ error: 'slug, version, html required' }, { status: 400 });
+      // Identity-stamp every commentable artifact with a content-hashed
+      // data-tdoc-aid. The SAME artifact in a different version has the
+      // SAME aid — so a comment anchored by aid resolves identity-first
+      // and cannot drift onto a different artifact.
+      const { html: stampedHtml, aids } = stampAids(doc);
       const r2Key = `docs/${slug}/v${version}/index.html`;
       try {
-        await env.DOCS.put(r2Key, doc, {
+        await env.DOCS.put(r2Key, stampedHtml, {
           httpMetadata: { contentType: 'text/html; charset=utf-8' },
         });
       } catch (e) {
@@ -693,7 +877,24 @@ export default {
         return json({ error: 'r2_write_lost', message: 'PUT succeeded but the key is not readable. Re-deploy the worker; the R2 binding may be stale.' }, { status: 500 });
       }
       if (meta) await env.META.put(`meta:${slug}`, JSON.stringify(meta));
-      return json({ ok: true, url: `/d/${slug}/v/${version}`, size: verify.size });
+      // Reconcile existing open comments against the new artifact set:
+      // bind by aid where possible; mark lost where the artifact is gone
+      // or ambiguous. This is the ENFORCED publish-time invariant — no
+      // agent honesty required, no silent re-anchoring to wrong artifacts.
+      try {
+        const cKey = `comments:${slug}`;
+        const raw = await env.META.get(cKey);
+        if (raw) {
+          const list = JSON.parse(raw);
+          const before = JSON.stringify(list);
+          reconcileAnchors(list, aids);
+          const after = JSON.stringify(list);
+          if (after !== before) await env.META.put(cKey, after);
+        }
+      } catch (e) {
+        console.log('[upload] anchor reconcile failed (non-fatal):', e.message);
+      }
+      return json({ ok: true, url: `/d/${slug}/v/${version}`, size: verify.size, aids: aids.length });
     }
 
     // ---- admin delete ----

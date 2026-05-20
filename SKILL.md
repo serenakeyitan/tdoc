@@ -411,13 +411,13 @@ The overlay applies these as `:where()` defensive defaults so old docs degrade g
 
 ### Comment anchor stability (important for `/tdoc edit`)
 
-When a user comments on an artifact, the comment stores a CSS selector for that element (built from the element's id if present, otherwise its tag + nth-of-type path) **plus a content fingerprint** (tag + normalized text + child structure + viewBox/src). The overlay resolves element anchors fingerprint-first: if the stored selector now lands on a *different* artifact, the comment goes **unanchored** rather than silently pointing at the wrong thing. For comments to **stay correctly anchored across `/tdoc edit` regenerations**, follow these rules — they are **mandatory**, not advisory:
+**The system handles this for you.** Element anchors are identity-based, not path-based: at publish time, the Worker stamps every commentable artifact (`img, svg, canvas, video, pre, figure, iframe`) with a content-hashed `data-tdoc-aid` attribute. The **same artifact in any future version gets the same aid**, regardless of how the HTML around it is restructured. Comments anchor by aid; resolution is identity-first. If an aid disappears from the new version, the Worker marks the comment `kind: "lost"` so it renders unanchored — it will **never silently re-attach to a different artifact**.
 
-- **MANDATORY: every artifact that has an open element-anchored comment MUST keep a stable, unchanged `id` in the regenerated HTML.** Before regenerating, read `comments.json`, list each `kind:"element"` comment's `anchor.selector`, find that artifact in the current HTML, and ensure the regenerated artifact has the **same `id`** on the **same element** (the element the selector points at — not a new wrapper around it).
-- **NEVER wrap an anchored artifact in a new parent** (e.g. putting an `<svg>` inside a new `<figure>`) or add/remove sibling elements of the same tag above it. Both shift `nth-of-type` and break the positional selector. If the artifact had no `id`, **add one** and keep the element at the same DOM position/depth.
-- **Don't change an anchored element's `id`** between versions unless its purpose genuinely changed.
-- **POST-EDIT VERIFICATION (required):** after writing `v<n+1>`, for every element-anchored open comment, confirm `document.querySelector(anchor.selector)` would resolve to the intended artifact in the new HTML (check the selector path by hand against the new DOM). If a selector no longer resolves to the right element, **fix the new HTML** (add/restore the id, un-nest the wrapper) — do not ship a version that silently re-points a comment at a different artifact. Report any anchor you intentionally let go unanchored in the agent reply.
-- When you intentionally change an anchored element semantically, it's fine for the comment to become "unanchored" — it still renders in the margin under an "unanchored" header so it's not lost. That's the *correct* failure mode; pointing at the wrong artifact is the bug.
+You generally don't need to do anything special when regenerating — the aid stamping is automatic on `/tdoc publish`. But it's still polite to:
+
+- **Keep an artifact's essential content stable** if its comment thread is still meaningful. The aid is derived from the artifact's tag + intrinsic attrs (`viewBox`, `src`, `alt`, `aria-label`, `title`) + normalized inner content. Trivial whitespace changes don't matter; replacing an SVG with an entirely different one *does* (and that's the right behavior — the comments were about the old artifact).
+- **Stable author-given ids are still nice** for things like deep links, but they're no longer required for anchor stability.
+- **When a comment intentionally goes unanchored** (because you replaced the artifact), say so in the agent reply. The user sees "anchor lost" in the margin and knows to either re-anchor it or accept the loss.
 
 ## Comment anchoring
 
@@ -430,23 +430,32 @@ Comments are persisted with one of two anchor shapes:
   "anchor": { "kind": "text", "text": "exact highlighted text",
               "context_before": "...", "context_after": "..." } }
 
-// element (artifact) anchor
+// element (artifact) anchor — IDENTITY-BASED
 { "id": "c_<ts>", "version": 1, "text": "what the user wrote",
   "status": "open", "created": "<iso>",
   "anchor": { "kind": "element",
-              "selector": "#diagram-a",          // or a positional path
-              "label": "svg",
-              "fingerprint": { "tag": "svg", "text": "...", "kids": "...",
-                               "meta": "viewBox|src|label", "h": "<hash>" } } }
+              "aid": "<content-hash>",        // ← primary key: the worker-stamped
+                                              //   data-tdoc-aid on the artifact.
+                                              //   Same artifact across versions = same aid.
+              "selector": "[data-tdoc-aid=\"...\"]",  // mirror of aid; legacy
+                                                       // comments may still have
+                                                       // a positional selector.
+              "label": "svg",                 // tag hint
+              "fingerprint": { ... },         // legacy content fingerprint
+              "fallback": { "ratio": ..., "nearestHeading": ... } } }
+
+// lost-anchor — the Worker's publish-time reconciliation marks an element
+// comment lost when its aid disappears or can't be resolved unambiguously.
+// Renders as "unanchored" in the margin; never silently re-attached.
+{ ..., "anchor": { "kind": "lost", "reason": "aid not found in version" } }
 ```
 
 **Text anchors:** find the anchor text in the current HTML and apply the
-change to that region. If the text no longer exists, apply as a general
-directive.
+change. If the text no longer exists, apply as a general directive.
 
-**Element anchors:** the `fingerprint` is how the overlay re-attaches a
-comment after the DOM is restructured. When regenerating, keep the
-anchored artifact's `id` and element identity stable (see *Comment anchor
-stability* above) so the fingerprint still matches. If you must change the
-artifact, the comment correctly goes *unanchored* — never let a positional
-selector silently slide onto a different artifact.
+**Element anchors:** identity is the **`aid`** — the Worker auto-stamps
+`data-tdoc-aid="<content-hash>"` on every commentable artifact at publish
+time, and reconciles existing anchors against the new artifact set on every
+upload. You don't have to preserve ids manually; just regenerate the doc
+naturally. Comments on unchanged artifacts stay anchored; comments on
+artifacts you genuinely replaced go `kind: "lost"` automatically.
