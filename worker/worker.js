@@ -753,6 +753,21 @@ export default {
       return json(target);
     }
 
+    // Admin: wipe ALL comments for a slug (doc owner only — uses the same
+    // upload token as /api/upload, so it can be invoked from the publish
+    // tooling or an agent that holds the token; the worker's KV is single-
+    // tenant so this is safe). Triggered by ?all=1 on DELETE /api/comments.
+    if (p === '/api/comments' && method === 'DELETE'
+        && url.searchParams.get('all') === '1') {
+      const unauth = requireUploadAuth(req, env);
+      if (unauth) return unauth;
+      const slug = url.searchParams.get('slug');
+      if (!slug) return json({ error: 'slug required' }, { status: 400 });
+      const raw = await env.META.get(`comments:${slug}`);
+      const before = raw ? JSON.parse(raw).length : 0;
+      await env.META.delete(`comments:${slug}`);
+      return json({ ok: true, deleted: before });
+    }
     if (p === '/api/comments' && method === 'DELETE') {
       const s = await getSession(env, req);
       if (!s) return json({ error: 'sign_in_required' }, { status: 401 });
