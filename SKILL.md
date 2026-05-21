@@ -507,13 +507,21 @@ else
   TEL_EFFECTIVE="on"
 fi
 
-# Write start sentinel only if telemetry is on
+# Session ID — Claude Code sets $CLAUDE_SESSION_ID in newer versions;
+# fall back to a stable per-shell id so concurrent sessions don't
+# overwrite each other's sentinel.
+TEL_SESSION_ID="${CLAUDE_SESSION_ID:-shell-$$-$(date +%s)}"
+
+# Write per-session sentinel (not one global file)
 if [ "$TEL_EFFECTIVE" != "off" ]; then
-  date +%s > "$TEL_HOME/.session-start"
+  mkdir -p "$TEL_HOME/sentinels"
+  date +%s > "$TEL_HOME/sentinels/$TEL_SESSION_ID"
+  find "$TEL_HOME/sentinels" -type f -mtime +1 -delete 2>/dev/null || true
 fi
 
 echo "TEL_PROMPTED: $TEL_PROMPTED"
 echo "TEL_EFFECTIVE: $TEL_EFFECTIVE"
+echo "TEL_SESSION_ID: $TEL_SESSION_ID"
 ```
 
 ### Instructions for Claude
@@ -551,46 +559,56 @@ event. **Do not skip this step.** Even errors are valuable signal.
 
 ```bash
 TEL_HOME="$HOME/.tdoc"
+TEL_SESSION_ID="${CLAUDE_SESSION_ID:-${TEL_SESSION_ID:-shell-$$-$(date +%s)}}"
 END=$(date +%s)
-START=$(cat "$TEL_HOME/.session-start" 2>/dev/null || echo "$END")
+START=$(cat "$TEL_HOME/sentinels/$TEL_SESSION_ID" 2>/dev/null || echo "$END")
 DURATION=$(( END - START ))
-rm -f "$TEL_HOME/.session-start"
+rm -f "$TEL_HOME/sentinels/$TEL_SESSION_ID"
 
 TEL_EFFECTIVE="${SKILL_TELEMETRY:-$(cat "$TEL_HOME/.telemetry-mode" 2>/dev/null || echo on)}"
 ```
 
 If `TEL_EFFECTIVE` is `off`, **stop here** — do not call telemetry-log.
 
-Otherwise pick the block matching the outcome:
+Otherwise pick the block matching the outcome.
+
+**For `--step`, pick the tdoc subcommand**: `new`, `edit`, `publish`,
+`list`, `pull`, `unpublish`, `onboard`, `doctor`, `update`. If the user
+invoked multiple in one session, use the last one. If it was an ad-hoc
+mention (not a /tdoc command), use `chat` or `freeform`.
 
 **On success**:
 
 ```bash
-"/Users/keyitan/.claude/skills/tdoc/telemetry/bin/telemetry-log" \
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
   --skill tdoc \
   --outcome success \
-  --duration "$DURATION"
+  --duration "$DURATION" \
+  --step "<subcommand: new|edit|publish|list|pull|unpublish|onboard|doctor|update|chat>" \
+  --session-id "$TEL_SESSION_ID"
 ```
 
 **On error**:
 
 ```bash
-"/Users/keyitan/.claude/skills/tdoc/telemetry/bin/telemetry-log" \
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
   --skill tdoc \
   --outcome error \
   --duration "$DURATION" \
   --error-detail "<one-line description of what failed, ≤160 chars>" \
-  --step "<which step of this skill was running>"
+  --step "<which subcommand was running and what phase failed>" \
+  --session-id "$TEL_SESSION_ID"
 ```
 
 **On abandoned** (user asked to stop):
 
 ```bash
-"/Users/keyitan/.claude/skills/tdoc/telemetry/bin/telemetry-log" \
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
   --skill tdoc \
   --outcome abandoned \
   --duration "$DURATION" \
-  --step "<last step you were on>"
+  --step "<subcommand + phase you were on>" \
+  --session-id "$TEL_SESSION_ID"
 ```
 
 The script is fire-and-forget. It returns instantly and syncs to
