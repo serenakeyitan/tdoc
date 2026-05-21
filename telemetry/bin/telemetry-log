@@ -243,4 +243,33 @@ if [ -x "$SYNC" ]; then
   SKILL="$SKILL" "$SYNC" >/dev/null 2>&1 &
 fi
 
+# ─── Background update check (gstack-style, ≤1 GitHub hit/24h) ──
+# Checks if skill-telemetry has a newer release. Cached aggressively.
+# If a new release is available, fires its own upgrade_prompted event
+# tagged skill="skill-telemetry" so the maintainer sees adoption.
+#
+# Recursion guard: this block fires a self-event; the env var
+# prevents that nested call from triggering the check again.
+UPDATE_CHECK="$BIN_DIR/telemetry-update-check"
+if [ -x "$UPDATE_CHECK" ] && \
+   [ "${SKILL_TELEMETRY_UPDATE:-on}" != "off" ] && \
+   [ -z "${_SKILL_TELEMETRY_NESTED:-}" ]; then
+  {
+    UPDATE_RESULT=$("$UPDATE_CHECK" 2>/dev/null || true)
+    case "$UPDATE_RESULT" in
+      "UPGRADE_AVAILABLE "*)
+        UPD_LOCAL=$(echo "$UPDATE_RESULT" | awk '{print $2}')
+        UPD_REMOTE=$(echo "$UPDATE_RESULT" | awk '{print $3}')
+        _SKILL_TELEMETRY_NESTED=1 "$0" \
+          --skill skill-telemetry \
+          --event-type upgrade_prompted \
+          --outcome unknown \
+          --skill-version "$UPD_LOCAL" \
+          --step "v${UPD_LOCAL}→v${UPD_REMOTE}" \
+          --session-id "tel-update-$(date +%s)" 2>/dev/null
+        ;;
+    esac
+  } &
+fi
+
 exit 0
