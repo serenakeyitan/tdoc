@@ -243,14 +243,37 @@ if [ -x "$SYNC" ]; then
   SKILL="$SKILL" "$SYNC" >/dev/null 2>&1 &
 fi
 
-# ─── Background update check (gstack-style, ≤1 GitHub hit/24h) ──
-# Checks if skill-telemetry has a newer release. Cached aggressively.
-# If a new release is available, fires its own upgrade_prompted event
-# tagged skill="skill-telemetry" so the maintainer sees adoption.
-#
-# Recursion guard: this block fires a self-event; the env var
-# prevents that nested call from triggering the check again.
+# ─── Background update check + gstack-style mode-aware action ──
+# Logic:
+#   1. Cheap cached check (≤1 GitHub hit / 24h via telemetry-update-check).
+#   2. If UPGRADE_AVAILABLE, read user's persistent upgrade-mode choice:
+#      - "always": auto-pull silently in background
+#      - "never":  log upgrade_prompted event silently, no UX
+#      - "ask" (default): emit UPGRADE_PROMPT_NEEDED to stderr so the host
+#        skill's preamble (Claude reading SKILL.md) can call AskUserQuestion
+#      - "snoozed for this version": treat like "never" until snooze expires
+#   3. Recursion-guarded via _SKILL_TELEMETRY_NESTED env.
 UPDATE_CHECK="$BIN_DIR/telemetry-update-check"
+UPGRADE_DECIDE="$BIN_DIR/telemetry-upgrade-decide"
+SHARED_DIR="${SKILL_TELEMETRY_SHARED_DIR:-$HOME/.skill-telemetry}"
+MODE_FILE="$SHARED_DIR/.upgrade-mode"
+SNOOZE_FILE="$SHARED_DIR/.upgrade-snoozed"
+
+is_version_snoozed() {
+  local target="$1"
+  [ ! -f "$SNOOZE_FILE" ] && return 1
+  local now=$(date +%s)
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    local sver=$(echo "$line" | awk '{print $1}')
+    local suntil=$(echo "$line" | awk '{print $2}')
+    if [ "$sver" = "$target" ] && [ "$now" -lt "$suntil" ] 2>/dev/null; then
+      return 0  # is snoozed
+    fi
+  done < "$SNOOZE_FILE"
+  return 1
+}
+
 if [ -x "$UPDATE_CHECK" ] && \
    [ "${SKILL_TELEMETRY_UPDATE:-on}" != "off" ] && \
    [ -z "${_SKILL_TELEMETRY_NESTED:-}" ]; then
@@ -260,6 +283,8 @@ if [ -x "$UPDATE_CHECK" ] && \
       "UPGRADE_AVAILABLE "*)
         UPD_LOCAL=$(echo "$UPDATE_RESULT" | awk '{print $2}')
         UPD_REMOTE=$(echo "$UPDATE_RESULT" | awk '{print $3}')
+
+        # Always log the upgrade_prompted event (author needs adoption signal)
         _SKILL_TELEMETRY_NESTED=1 "$0" \
           --skill skill-telemetry \
           --event-type upgrade_prompted \
@@ -267,6 +292,39 @@ if [ -x "$UPDATE_CHECK" ] && \
           --skill-version "$UPD_LOCAL" \
           --step "v${UPD_LOCAL}→v${UPD_REMOTE}" \
           --session-id "tel-update-$(date +%s)" 2>/dev/null
+
+        # Read persistent decision
+        MODE="$(cat "$MODE_FILE" 2>/dev/null | tr -d '[:space:]')"
+        [ -z "$MODE" ] && MODE="ask"
+
+        # Snooze check
+        if is_version_snoozed "$UPD_REMOTE"; then
+          MODE="snoozed"
+        fi
+
+        case "$MODE" in
+          always)
+            # Auto-pull silently: pull source repo + run update.
+            # Prefer telemetry-update-check's source path; the SRC env
+            # variable is detected by skill-telemetry-update.
+            UPDATER="$BIN_DIR/skill-telemetry-update"
+            if [ -x "$UPDATER" ]; then
+              "$UPDATER" --include "$SKILL" >/dev/null 2>&1 || true
+            fi
+            ;;
+
+          never|snoozed)
+            # Silent — only the event was logged above
+            ;;
+
+          ask|*)
+            # Emit a sentinel on stderr that host skill's preamble watches for.
+            # Format: UPGRADE_PROMPT_NEEDED <skill-telemetry-old> <skill-telemetry-new>
+            # The host SKILL.md's preamble greps for this and calls AskUserQuestion.
+            # Sentinel only printed once per check (controlled by 24h cache).
+            echo "UPGRADE_PROMPT_NEEDED $UPD_LOCAL $UPD_REMOTE" >&2
+            ;;
+        esac
         ;;
     esac
   } &

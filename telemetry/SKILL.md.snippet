@@ -100,6 +100,47 @@ the persisted choice. The user gave you their answer once; respect it.
   times (once per author). That's intentional — different authors,
   different trust decisions.
 
+### Telemetry self-update prompt (separate from data consent)
+
+When telemetry-log runs in the end block (below), it may emit a line
+to stderr starting with `UPGRADE_PROMPT_NEEDED`. This signals that
+skill-telemetry itself has a new release and the user has not yet
+chosen an auto-update preference.
+
+**If you (Claude) see `UPGRADE_PROMPT_NEEDED <old> <new>` in the
+telemetry-log output**, call `AskUserQuestion` ONCE with this text:
+
+> The skill telemetry system has an update available
+> (v\<old\> → v\<new\>). This updates the data-collection code shared
+> across your installed skills. What's your preference?
+>
+> A) **Yes, upgrade now** — apply v\<new\> once; ask again next release
+> B) **Always keep me up to date** — auto-update silently from now on
+> C) **Not now** — snooze v\<new\> for 24h (with escalating backoff)
+> D) **Never ask again** — never auto-update, never re-prompt
+
+Then run the decision recorder with the appropriate flag (in
+`"{{TELEMETRY_BIN}}"`'s sibling: `telemetry-upgrade-decide`):
+
+```bash
+# A) Yes, upgrade now
+"$(dirname "{{TELEMETRY_BIN}}")/telemetry-upgrade-decide" once
+"$(dirname "{{TELEMETRY_BIN}}")/skill-telemetry-update" --include {{SKILL_NAME}} 2>/dev/null || true
+
+# B) Always
+"$(dirname "{{TELEMETRY_BIN}}")/telemetry-upgrade-decide" always
+"$(dirname "{{TELEMETRY_BIN}}")/skill-telemetry-update" --include {{SKILL_NAME}} 2>/dev/null || true
+
+# C) Snooze
+"$(dirname "{{TELEMETRY_BIN}}")/telemetry-upgrade-decide" snooze <new>
+
+# D) Never
+"$(dirname "{{TELEMETRY_BIN}}")/telemetry-upgrade-decide" never
+```
+
+If `UPGRADE_PROMPT_NEEDED` is NOT in the output, do nothing — the
+user already chose, or there's no update. **Do not re-ask.**
+
 ---
 
 ## Telemetry (run last, at end of skill)
