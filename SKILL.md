@@ -459,3 +459,129 @@ time, and reconciles existing anchors against the new artifact set on every
 upload. You don't have to preserve ids manually; just regenerate the doc
 naturally. Comments on unchanged artifacts stay anchored; comments on
 artifacts you genuinely replaced go `kind: "lost"` automatically.
+
+---
+
+## Telemetry preamble (run first)
+
+This block records anonymous usage data so the tdoc maintainer can see
+which features people actually use and what breaks. **Default-on with
+first-run consent prompt.** Three opt-out paths described at the bottom.
+
+```bash
+TEL_HOME="$HOME/.tdoc"
+TEL_PROMPTED_FLAG="$TEL_HOME/.telemetry-prompted"
+TEL_CONFIG_FILE="$TEL_HOME/.telemetry-mode"
+
+mkdir -p "$TEL_HOME"
+
+# Read existing choice. Priority: env var > persisted file > default "on"
+TEL_MODE_PERSISTED="$(cat "$TEL_CONFIG_FILE" 2>/dev/null | tr -d ' \n\r')"
+TEL_PROMPTED="no"
+[ -f "$TEL_PROMPTED_FLAG" ] && TEL_PROMPTED="yes"
+
+if [ -n "${SKILL_TELEMETRY:-}" ]; then
+  TEL_EFFECTIVE="$SKILL_TELEMETRY"
+elif [ -n "$TEL_MODE_PERSISTED" ]; then
+  TEL_EFFECTIVE="$TEL_MODE_PERSISTED"
+else
+  TEL_EFFECTIVE="on"
+fi
+
+# Write start sentinel only if telemetry is on
+if [ "$TEL_EFFECTIVE" != "off" ]; then
+  date +%s > "$TEL_HOME/.session-start"
+fi
+
+echo "TEL_PROMPTED: $TEL_PROMPTED"
+echo "TEL_EFFECTIVE: $TEL_EFFECTIVE"
+```
+
+### Instructions for Claude
+
+**If `TEL_PROMPTED` is `no`** (first time the user runs tdoc with
+telemetry), call `AskUserQuestion` ONCE with this text and three options:
+
+> tdoc can record when it runs, how it went (success/error/abandoned),
+> how long it took, and a random ID for your machine, and send it to
+> the tdoc maintainer's database. It does NOT record your tdoc content,
+> your prompts, or anything else. Nothing is sent to Anthropic.
+>
+> A) **Help tdoc improve** — sends events (recommended)
+> B) **Anonymous** — sends counts but strips machine ID
+> C) **Off** — nothing leaves your machine
+>
+> Change anytime: edit `~/.tdoc/.telemetry-mode`, or set
+> `SKILL_TELEMETRY=off`.
+
+After they pick, record the choice:
+
+```bash
+echo "MODE_FROM_USER" > "$TEL_CONFIG_FILE"  # "on", "anonymous", or "off"
+touch "$TEL_PROMPTED_FLAG"
+TEL_EFFECTIVE="$(cat "$TEL_CONFIG_FILE")"
+```
+
+**If `TEL_PROMPTED` is `yes`**, do NOT ask again. Proceed silently.
+
+---
+
+## Telemetry (run last, at end of skill)
+
+When the skill completes — success, error, or abandoned — record one
+event. **Do not skip this step.** Even errors are valuable signal.
+
+```bash
+TEL_HOME="$HOME/.tdoc"
+END=$(date +%s)
+START=$(cat "$TEL_HOME/.session-start" 2>/dev/null || echo "$END")
+DURATION=$(( END - START ))
+rm -f "$TEL_HOME/.session-start"
+
+TEL_EFFECTIVE="${SKILL_TELEMETRY:-$(cat "$TEL_HOME/.telemetry-mode" 2>/dev/null || echo on)}"
+```
+
+If `TEL_EFFECTIVE` is `off`, **stop here** — do not call telemetry-log.
+
+Otherwise pick the block matching the outcome:
+
+**On success**:
+
+```bash
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+  --skill tdoc \
+  --outcome success \
+  --duration "$DURATION"
+```
+
+**On error**:
+
+```bash
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+  --skill tdoc \
+  --outcome error \
+  --duration "$DURATION" \
+  --error-detail "<one-line description of what failed, ≤160 chars>" \
+  --step "<which step of this skill was running>"
+```
+
+**On abandoned** (user asked to stop):
+
+```bash
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+  --skill tdoc \
+  --outcome abandoned \
+  --duration "$DURATION" \
+  --step "<last step you were on>"
+```
+
+The script is fire-and-forget. It returns instantly and syncs to
+Supabase in the background.
+
+### Three opt-out paths
+
+- **First run**: pick "Off" in the consent prompt above
+- **Persistent**: `echo off > ~/.tdoc/.telemetry-mode`
+- **Ephemeral**: `export SKILL_TELEMETRY=off`
+
+See `telemetry/PRIVACY.md` for the full list of recorded fields.

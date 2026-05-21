@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# telemetry-sync — push unsent local events to the author's Supabase edge
+# function. Fire-and-forget, rate-limited, cursor-tracked so events never
+# double-send and a network outage just delays — never loses — data.
+#
+# Required env (set by telemetry-log or invoked directly):
+#   SKILL                        — which skill we're syncing for
+#
+# Optional env:
+#   SKILL_TELEMETRY=off          — disables sync entirely
+#   SKILL_TELEMETRY_DIR          — override state dir (default: ~/.$SKILL)
+#   SKILL_TELEMETRY_CONFIG       — override config path
+#   SKILL_TELEMETRY_RATE_MINUTES — min minutes between syncs (default: 5)
+#
+# Reads from author's config:
+#   SKILL_TELEMETRY_SUPABASE_URL
+#   SKILL_TELEMETRY_ANON_KEY
+#
+# These come from supabase/config.sh, which the author ships inside their
+# skill package. See supabase/config.sh.example.
+
+set -uo pipefail
+
+# ─── Master kill switch ──────────────────────────────────────
+[ "${SKILL_TELEMETRY:-on}" = "off" ] && exit 0
+
+# ─── Skill name required ─────────────────────────────────────
+SKILL="${SKILL:-}"
+[ -z "$SKILL" ] && exit 0
+
+# ─── Resolve paths ───────────────────────────────────────────
+STATE_DIR="${SKILL_TELEMETRY_DIR:-$HOME/.${SKILL}}"
+ANALYTICS_DIR="$STATE_DIR/telemetry"
+DAY="$(date -u +%Y-%m-%d)"
+JSONL_FILE="$ANALYTICS_DIR/$DAY.jsonl"
+CURSOR_FILE="$ANALYTICS_DIR/.cursor-$DAY"
+RATE_FILE="$ANALYTICS_DIR/.last-sync"
+
+# Locate config: env override > skill-local config > template default
+BIN_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+CONFIG="${SKILL_TELEMETRY_CONFIG:-$BIN_DIR/../supabase/config.sh}"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+SUPABASE_URL="${SKILL_TELEMETRY_SUPABASE_URL:-}"
+ANON_KEY="${SKILL_TELEMETRY_ANON_KEY:-}"
+
+# No config → local-only mode, exit silently. Local logging still works.
+[ -z "$SUPABASE_URL" ] && exit 0
+[ -z "$ANON_KEY" ] && exit 0
+
+# No JSONL → nothing to send
+[ -f "$JSONL_FILE" ] || exit 0
+
+# ─── Rate limit ──────────────────────────────────────────────
+RATE_MINUTES="${SKILL_TELEMETRY_RATE_MINUTES:-5}"
+case "$RATE_MINUTES" in
+  ''|*[!0-9]*) RATE_MINUTES=5 ;;
+esac
+if [ -f "$RATE_FILE" ]; then
+  STALE="$(find "$RATE_FILE" -mmin +"$RATE_MINUTES" 2>/dev/null || true)"
+  [ -z "$STALE" ] && exit 0
+fi
+
+# ─── Cursor (lines already sent) ─────────────────────────────
+CURSOR=0
+if [ -f "$CURSOR_FILE" ]; then
+  CURSOR="$(cat "$CURSOR_FILE" 2>/dev/null | tr -d ' \n\r\t')"
+  case "$CURSOR" in *[!0-9]*) CURSOR=0 ;; esac
+fi
+
+TOTAL="$(wc -l < "$JSONL_FILE" 2>/dev/null | tr -d ' \n\r\t')"
+case "$TOTAL" in ''|*[!0-9]*) TOTAL=0 ;; esac
+
+# Cursor past end (file rotated, etc) → reset
+if [ "$CURSOR" -gt "$TOTAL" ] 2>/dev/null; then
+  CURSOR=0
+fi
+[ "$CURSOR" -ge "$TOTAL" ] 2>/dev/null && exit 0
+
+# ─── Read unsent lines (cap batch at 100) ────────────────────
+SKIP=$(( CURSOR + 1 ))
+UNSENT="$(tail -n "+$SKIP" "$JSONL_FILE" 2>/dev/null || true)"
+[ -z "$UNSENT" ] && exit 0
+
+BATCH="["
+FIRST=true
+COUNT=0
+while IFS= read -r LINE; do
+  [ -z "$LINE" ] && continue
+  echo "$LINE" | grep -q '^{' || continue
+  if [ "$FIRST" = "true" ]; then FIRST=false; else BATCH="$BATCH,"; fi
+  BATCH="$BATCH$LINE"
+  COUNT=$(( COUNT + 1 ))
+  [ "$COUNT" -ge 100 ] && break
+done <<< "$UNSENT"
+BATCH="$BATCH]"
+[ "$COUNT" -eq 0 ] && exit 0
+
+# ─── POST to edge function ───────────────────────────────────
+HTTP_CODE="$(curl -s -w '%{http_code}' --max-time 10 \
+  -X POST "${SUPABASE_URL}/functions/v1/skill-telemetry-ingest" \
+  -H "Content-Type: application/json" \
+  -H "apikey: ${ANON_KEY}" \
+  -H "Authorization: Bearer ${ANON_KEY}" \
+  -o /dev/null \
+  -d "$BATCH" 2>/dev/null || echo "000")"
+
+case "$HTTP_CODE" in
+  2*)
+    # Advance cursor only on success
+    echo "$((CURSOR + COUNT))" > "$CURSOR_FILE" 2>/dev/null || true
+    touch "$RATE_FILE" 2>/dev/null || true
+    ;;
+  *)
+    # Failure: leave cursor, just update rate-limit so we don't hammer
+    touch "$RATE_FILE" 2>/dev/null || true
+    ;;
+esac
+
+exit 0

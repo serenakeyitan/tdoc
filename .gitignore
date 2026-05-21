@@ -18,3 +18,6 @@ worker/wrangler.toml
 node_modules/
 npm-debug.log
 yarn-error.log
+
+# Telemetry runtime artifacts (per-user, never commit)
+telemetry/supabase/.temp/

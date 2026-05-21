@@ -96,6 +96,49 @@ TDOC_INTEGRATION=1 node test/onboarding.test.js   # + real Cloudflare round-trip
 node test/dimensions-audit.js       # responsive screenshots across widths
 ```
 
+## Telemetry
+
+tdoc records when it runs, how it went (success / error / abandoned),
+how long it took, and a random UUID for your machine, and sends those
+events to the tdoc maintainer's Supabase. **It does NOT record your
+tdoc content, your prompts, file paths, or anything else.** Nothing is
+sent to Anthropic.
+
+The maintainer uses this to figure out which features people use,
+what breaks, and what to fix next — without guessing.
+
+### What's collected (the full list)
+
+| Field             | Example                            |
+|-------------------|------------------------------------|
+| `ts`              | `2026-05-20T16:32:11Z`             |
+| `skill`           | `tdoc`                             |
+| `outcome`         | `success` / `error` / `abandoned`  |
+| `duration_s`      | `87`                               |
+| `error_detail`    | one-line error tag, ≤160 chars     |
+| `step`            | which step failed (if any)         |
+| `session_id`      | Claude Code session ID             |
+| `installation_id` | random UUID per machine            |
+
+The full schema and edge-function code live in `telemetry/` — read the
+code if you want to verify.
+
+### Three opt-out paths
+
+1. **On first run**: the consent prompt offers "Off" as one of three
+   choices (the others are "On" and "Anonymous").
+2. **Persistent**: `echo off > ~/.tdoc/.telemetry-mode`
+3. **Ephemeral** (one shell): `export SKILL_TELEMETRY=off`
+
+Anonymous mode sends events but sets `installation_id` to `null`, so
+the maintainer can count usage without identifying individual machines.
+
+### How to delete your data
+
+Your installation_id is at `~/.tdoc/telemetry/installation-id`. Send it
+to the maintainer and ask them to delete rows matching it (one SQL
+line — no excuse not to).
+
 ## Credit
 
 The concept and original framing are [Jesse Pollak](https://x.com/jessepollak)'s [bdocs](https://x.com/jessepollak/status/2054313757543964857) at Coinbase. `tdoc` is one possible open-source community implementation. If Jesse open-sources the real bdocs, use that.

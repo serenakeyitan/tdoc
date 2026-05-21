@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# telemetry-log — append a skill-invocation event to local JSONL, then
+# fire telemetry-sync in the background.
+#
+# Called by the skill itself from its SKILL.md "TELEMETRY" section at the
+# end of a run. The skill knows what it is and how it went; this script
+# just records it honestly.
+#
+# Usage:
+#   telemetry-log --skill <name> [--outcome success|error|abandoned|unknown]
+#                 [--duration <int seconds>] [--error-detail <≤160 chars>]
+#                 [--step <step-name>] [--session-id <id>]
+#
+# Env:
+#   SKILL_TELEMETRY=off          — disables ALL writing and sync (overrides everything)
+#   SKILL_TELEMETRY=anonymous    — sends events but strips installation_id
+#   SKILL_TELEMETRY=on           — sends everything (default)
+#   SKILL_TELEMETRY_DIR          — override state dir (default: ~/.<skill>)
+#   SKILL_TELEMETRY_BIN          — override bin dir (default: dir of this script)
+#
+# Persistent mode (~/.<skill>/.telemetry-mode) is read if env var not set.
+# Written by the preamble in the host skill's SKILL.md on first run.
+#
+# Failure mode: never exits non-zero. Telemetry must not break the skill.
+
+set -uo pipefail
+
+# ─── Determine effective mode (env > persisted > default) ────
+# We need $SKILL to find the persisted config, but $SKILL comes from args.
+# So peek at args first just to extract --skill, then resolve mode.
+PEEK_SKILL=""
+for ((i=1; i<=$#; i++)); do
+  if [ "${!i:-}" = "--skill" ]; then
+    next=$((i + 1))
+    PEEK_SKILL="${!next:-}"
+    break
+  fi
+done
+
+if [ -n "${SKILL_TELEMETRY:-}" ]; then
+  MODE="$SKILL_TELEMETRY"
+elif [ -n "$PEEK_SKILL" ] && [ -f "$HOME/.${PEEK_SKILL}/.telemetry-mode" ]; then
+  MODE="$(cat "$HOME/.${PEEK_SKILL}/.telemetry-mode" 2>/dev/null | tr -d ' \n\r')"
+else
+  MODE="on"
+fi
+
+# Validate mode
+case "$MODE" in
+  on|anonymous|off) ;;
+  *) MODE="on" ;;
+esac
+
+# Master kill switch
+[ "$MODE" = "off" ] && exit 0
+
+# ─── Parse args ──────────────────────────────────────────────
+SKILL=""
+OUTCOME="unknown"
+DURATION=""
+ERROR_DETAIL=""
+STEP=""
+SESSION_ID=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skill)        SKILL="${2:-}"; shift 2 || break ;;
+    --outcome)      OUTCOME="${2:-unknown}"; shift 2 || break ;;
+    --duration)     DURATION="${2:-}"; shift 2 || break ;;
+    --error-detail) ERROR_DETAIL="${2:-}"; shift 2 || break ;;
+    --step)         STEP="${2:-}"; shift 2 || break ;;
+    --session-id)   SESSION_ID="${2:-}"; shift 2 || break ;;
+    *) shift ;;
+  esac
+done
+
+# Skill name is required. Without it the event is useless.
+if [ -z "$SKILL" ]; then
+  exit 0
+fi
+
+# Validate outcome
+case "$OUTCOME" in
+  success|error|abandoned|unknown) ;;
+  *) OUTCOME="unknown" ;;
+esac
+
+# ─── State dirs ──────────────────────────────────────────────
+STATE_DIR="${SKILL_TELEMETRY_DIR:-$HOME/.${SKILL}}"
+ANALYTICS_DIR="$STATE_DIR/telemetry"
+JSONL_FILE="$ANALYTICS_DIR/$(date -u +%Y-%m-%d).jsonl"
+ID_FILE="$ANALYTICS_DIR/installation-id"
+
+mkdir -p "$ANALYTICS_DIR" 2>/dev/null || exit 0
+
+# ─── Installation ID (UUIDv4, generated once per machine per skill) ──
+if [ ! -f "$ID_FILE" ]; then
+  # Prefer uuidgen, fall back to /proc/sys/kernel/random/uuid, then to a
+  # python one-liner, then to a hashed hostname+timestamp as last resort.
+  if command -v uuidgen >/dev/null 2>&1; then
+    INSTALL_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+  elif [ -f /proc/sys/kernel/random/uuid ]; then
+    INSTALL_ID="$(cat /proc/sys/kernel/random/uuid)"
+  elif command -v python3 >/dev/null 2>&1; then
+    INSTALL_ID="$(python3 -c 'import uuid;print(uuid.uuid4())')"
+  else
+    INSTALL_ID="$(printf '%s-%s' "$(hostname 2>/dev/null || echo host)" "$(date +%s%N 2>/dev/null || date +%s)" | shasum 2>/dev/null | cut -c1-36 || echo "unknown")"
+  fi
+  echo "$INSTALL_ID" > "$ID_FILE" 2>/dev/null || true
+fi
+INSTALL_ID="$(cat "$ID_FILE" 2>/dev/null || echo unknown)"
+
+# ─── Anonymous mode: strip the installation ID ───────────────
+# We still send the event (counts matter), but the author can't tell
+# different users apart. This is the user's chosen middle ground.
+if [ "$MODE" = "anonymous" ]; then
+  INSTALL_ID=""
+fi
+
+# ─── Timestamp ───────────────────────────────────────────────
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# ─── Escape strings for JSON ─────────────────────────────────
+# Minimal escaping: backslash, double-quote, control chars become spaces.
+json_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/\\/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/[[:cntrl:]]/ /g'
+}
+
+SKILL_ESC="$(json_escape "$SKILL")"
+ERROR_ESC="$(json_escape "$ERROR_DETAIL")"
+STEP_ESC="$(json_escape "$STEP")"
+SESSION_ESC="$(json_escape "$SESSION_ID")"
+
+# Cap error_detail at 160 chars to avoid blowing up the row
+if [ ${#ERROR_ESC} -gt 160 ]; then
+  ERROR_ESC="$(printf '%s' "$ERROR_ESC" | cut -c1-160)"
+fi
+
+# Duration: must be a non-negative integer or "null"
+DUR_JSON="null"
+if [ -n "$DURATION" ]; then
+  case "$DURATION" in
+    ''|*[!0-9]*) DUR_JSON="null" ;;
+    *) DUR_JSON="$DURATION" ;;
+  esac
+fi
+
+# Optional string fields: "" → null in JSON
+ERROR_JSON="null"
+[ -n "$ERROR_ESC" ] && ERROR_JSON="\"$ERROR_ESC\""
+STEP_JSON="null"
+[ -n "$STEP_ESC" ] && STEP_JSON="\"$STEP_ESC\""
+SESSION_JSON="null"
+[ -n "$SESSION_ESC" ] && SESSION_JSON="\"$SESSION_ESC\""
+
+# installation_id: "" → null (anonymous mode), else the UUID
+INSTALL_JSON="null"
+[ -n "$INSTALL_ID" ] && INSTALL_JSON="\"$INSTALL_ID\""
+
+# ─── Append one JSON line (atomic single-line >> on POSIX) ───
+printf '{"ts":"%s","skill":"%s","outcome":"%s","duration_s":%s,"error_detail":%s,"step":%s,"session_id":%s,"installation_id":%s}\n' \
+  "$TS" "$SKILL_ESC" "$OUTCOME" "$DUR_JSON" "$ERROR_JSON" "$STEP_JSON" "$SESSION_JSON" "$INSTALL_JSON" \
+  >> "$JSONL_FILE" 2>/dev/null || true
+
+# ─── Fire background sync (non-blocking) ─────────────────────
+BIN_DIR="${SKILL_TELEMETRY_BIN:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)}"
+SYNC="$BIN_DIR/telemetry-sync"
+if [ -x "$SYNC" ]; then
+  SKILL="$SKILL" "$SYNC" >/dev/null 2>&1 &
+fi
+
+exit 0
