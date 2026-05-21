@@ -125,13 +125,9 @@ code if you want to verify.
 
 ### Three opt-out paths
 
-1. **On first run**: the consent prompt offers "Off" as one of three
-   choices (the others are "On" and "Anonymous").
+1. **On first run**: pick "Off" in the consent prompt.
 2. **Persistent**: `echo off > ~/.tdoc/.telemetry-mode`
 3. **Ephemeral** (one shell): `export SKILL_TELEMETRY=off`
-
-Anonymous mode sends events but sets `installation_id` to `null`, so
-the maintainer can count usage without identifying individual machines.
 
 ### How to delete your data
 

@@ -500,7 +500,7 @@ echo "TEL_EFFECTIVE: $TEL_EFFECTIVE"
 ### Instructions for Claude
 
 **If `TEL_PROMPTED` is `no`** (first time the user runs tdoc with
-telemetry), call `AskUserQuestion` ONCE with this text and three options:
+telemetry), call `AskUserQuestion` ONCE with this text and two options:
 
 > tdoc can record when it runs, how it went (success/error/abandoned),
 > how long it took, and a random ID for your machine, and send it to
@@ -508,8 +508,7 @@ telemetry), call `AskUserQuestion` ONCE with this text and three options:
 > your prompts, or anything else. Nothing is sent to Anthropic.
 >
 > A) **Help tdoc improve** — sends events (recommended)
-> B) **Anonymous** — sends counts but strips machine ID
-> C) **Off** — nothing leaves your machine
+> B) **Off** — nothing leaves your machine
 >
 > Change anytime: edit `~/.tdoc/.telemetry-mode`, or set
 > `SKILL_TELEMETRY=off`.
@@ -517,7 +516,7 @@ telemetry), call `AskUserQuestion` ONCE with this text and three options:
 After they pick, record the choice:
 
 ```bash
-echo "MODE_FROM_USER" > "$TEL_CONFIG_FILE"  # "on", "anonymous", or "off"
+echo "MODE_FROM_USER" > "$TEL_CONFIG_FILE"  # "on" or "off"
 touch "$TEL_PROMPTED_FLAG"
 TEL_EFFECTIVE="$(cat "$TEL_CONFIG_FILE")"
 ```
