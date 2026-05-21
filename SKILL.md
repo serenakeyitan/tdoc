@@ -519,9 +519,32 @@ if [ "$TEL_EFFECTIVE" != "off" ]; then
   find "$TEL_HOME/sentinels" -type f -mtime +1 -delete 2>/dev/null || true
 fi
 
+# ─── Upgrade check (gstack-style lifecycle event) ───────────
+# Check installed version against latest release. If stale, record
+# upgrade_prompted event and tell the user (once per day, not nag).
+TDOC_DIR="$HOME/.claude/skills/tdoc"
+INSTALLED_VERSION=$(cat "$TDOC_DIR/VERSION" 2>/dev/null || echo "0.0.0")
+UPGRADE_CHECK_FLAG="$TEL_HOME/.upgrade-checked-$(date +%Y-%m-%d)"
+if [ "$TEL_EFFECTIVE" != "off" ] && [ ! -f "$UPGRADE_CHECK_FLAG" ]; then
+  LATEST=$(curl -s --max-time 3 https://api.github.com/repos/serenakeyitan/tdoc/releases/latest 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
+  if [ -n "$LATEST" ] && [ "$LATEST" != "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "0.0.0" ]; then
+    # Fire lifecycle event — author sees how many users have stale installs
+    "$TDOC_DIR/telemetry/bin/telemetry-log" \
+      --skill tdoc \
+      --event-type upgrade_prompted \
+      --outcome unknown \
+      --skill-version "$INSTALLED_VERSION" \
+      --step "v$INSTALLED_VERSION→v$LATEST" \
+      --session-id "$TEL_SESSION_ID" 2>/dev/null || true
+    echo "TDOC_UPGRADE_AVAILABLE: $INSTALLED_VERSION → $LATEST  (cd $TDOC_DIR && git pull && bin/postinstall-telemetry.sh)"
+  fi
+  touch "$UPGRADE_CHECK_FLAG" 2>/dev/null || true
+fi
+
 echo "TEL_PROMPTED: $TEL_PROMPTED"
 echo "TEL_EFFECTIVE: $TEL_EFFECTIVE"
 echo "TEL_SESSION_ID: $TEL_SESSION_ID"
+echo "TDOC_VERSION: $INSTALLED_VERSION"
 ```
 
 ### Instructions for Claude
@@ -585,6 +608,7 @@ mention (not a /tdoc command), use `chat` or `freeform`.
   --outcome success \
   --duration "$DURATION" \
   --step "<subcommand: new|edit|publish|list|pull|unpublish|onboard|doctor|update|chat>" \
+  --skill-version "$INSTALLED_VERSION" \
   --session-id "$TEL_SESSION_ID"
 ```
 
@@ -595,8 +619,10 @@ mention (not a /tdoc command), use `chat` or `freeform`.
   --skill tdoc \
   --outcome error \
   --duration "$DURATION" \
-  --error-detail "<one-line description of what failed, ≤160 chars>" \
+  --error-class "<short tag, e.g. 'publish_timeout' / 'auth_failed' / 'malformed_input'>" \
+  --error-message "<full debug context, ≤400 chars>" \
   --step "<which subcommand was running and what phase failed>" \
+  --skill-version "$INSTALLED_VERSION" \
   --session-id "$TEL_SESSION_ID"
 ```
 
@@ -608,6 +634,7 @@ mention (not a /tdoc command), use `chat` or `freeform`.
   --outcome abandoned \
   --duration "$DURATION" \
   --step "<subcommand + phase you were on>" \
+  --skill-version "$INSTALLED_VERSION" \
   --session-id "$TEL_SESSION_ID"
 ```
 

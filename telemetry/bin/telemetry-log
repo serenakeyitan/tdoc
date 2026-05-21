@@ -58,21 +58,41 @@ esac
 SKILL=""
 OUTCOME="unknown"
 DURATION=""
-ERROR_DETAIL=""
+ERROR_DETAIL=""        # DEPRECATED — keep for backward compat
+ERROR_CLASS=""         # v2: low-cardinality tag, e.g. "supabase_timeout"
+ERROR_MESSAGE=""       # v2: high-cardinality text
 STEP=""
 SESSION_ID=""
+SKILL_VERSION=""       # v2: e.g. "0.1.55"
+EVENT_TYPE="skill_run" # v3: skill_run | upgrade_prompted | consent_prompted | ...
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --skill)        SKILL="${2:-}"; shift 2 || break ;;
-    --outcome)      OUTCOME="${2:-unknown}"; shift 2 || break ;;
-    --duration)     DURATION="${2:-}"; shift 2 || break ;;
-    --error-detail) ERROR_DETAIL="${2:-}"; shift 2 || break ;;
-    --step)         STEP="${2:-}"; shift 2 || break ;;
-    --session-id)   SESSION_ID="${2:-}"; shift 2 || break ;;
+    --skill)         SKILL="${2:-}"; shift 2 || break ;;
+    --outcome)       OUTCOME="${2:-unknown}"; shift 2 || break ;;
+    --duration)      DURATION="${2:-}"; shift 2 || break ;;
+    --error-detail)  ERROR_DETAIL="${2:-}"; shift 2 || break ;;     # legacy
+    --error-class)   ERROR_CLASS="${2:-}"; shift 2 || break ;;      # v2
+    --error-message) ERROR_MESSAGE="${2:-}"; shift 2 || break ;;    # v2
+    --step)          STEP="${2:-}"; shift 2 || break ;;
+    --session-id)    SESSION_ID="${2:-}"; shift 2 || break ;;
+    --skill-version) SKILL_VERSION="${2:-}"; shift 2 || break ;;    # v2
+    --event-type)    EVENT_TYPE="${2:-skill_run}"; shift 2 || break ;;  # v3
     *) shift ;;
   esac
 done
+
+# Validate event_type — known values only, else fall back
+case "$EVENT_TYPE" in
+  skill_run|upgrade_prompted|consent_prompted|consent_granted|consent_declined|opt_out|first_run) ;;
+  *) EVENT_TYPE="skill_run" ;;
+esac
+
+# Backward compat: if legacy --error-detail is used (no class/message),
+# treat it as the message. Class stays empty.
+if [ -z "$ERROR_MESSAGE" ] && [ -n "$ERROR_DETAIL" ]; then
+  ERROR_MESSAGE="$ERROR_DETAIL"
+fi
 
 # Skill name is required. Without it the event is useless.
 if [ -z "$SKILL" ]; then
@@ -120,6 +140,36 @@ fi
 # ─── Timestamp ───────────────────────────────────────────────
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# ─── Platform info (v2) ─────────────────────────────────────
+# uname is POSIX, present everywhere. Lowercase for consistency.
+OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo unknown)"
+ARCH="$(uname -m 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo unknown)"
+
+# ─── Concurrent session count (v3, gstack parity) ───────────
+# Touch a per-session marker, then count markers <120min old.
+# That's how many concurrent skill runs are active right now.
+SESSIONS_DIR="$ANALYTICS_DIR/sessions"
+mkdir -p "$SESSIONS_DIR" 2>/dev/null || true
+[ -n "$SESSION_ID" ] && touch "$SESSIONS_DIR/$SESSION_ID" 2>/dev/null || true
+# Reap stale (>120min) markers, count what's left
+find "$SESSIONS_DIR" -type f -mmin +120 -delete 2>/dev/null || true
+CONCURRENT_SESSIONS="$(find "$SESSIONS_DIR" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 1)"
+[ -z "$CONCURRENT_SESSIONS" ] || [ "$CONCURRENT_SESSIONS" -lt 1 ] && CONCURRENT_SESSIONS=1
+
+# ─── Local-only repo context (v3, gstack parity) ────────────
+# Captured in local JSONL for the user's own debugging. Sync STRIPS
+# these fields before posting to Supabase — they never leave the
+# machine. Author sees aggregate counts; user keeps repo names private.
+REPO_SLUG=""
+REPO_BRANCH=""
+if command -v git >/dev/null 2>&1; then
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$REPO_ROOT" ]; then
+    REPO_SLUG="$(basename "$REPO_ROOT" 2>/dev/null | tr '[:upper:] ' '[:lower:]-')"
+    REPO_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+  fi
+fi
+
 # ─── Escape strings for JSON ─────────────────────────────────
 # Minimal escaping: backslash, double-quote, control chars become spaces.
 json_escape() {
@@ -130,13 +180,24 @@ json_escape() {
 }
 
 SKILL_ESC="$(json_escape "$SKILL")"
-ERROR_ESC="$(json_escape "$ERROR_DETAIL")"
+SKILL_VER_ESC="$(json_escape "$SKILL_VERSION")"
+ERROR_CLASS_ESC="$(json_escape "$ERROR_CLASS")"
+ERROR_MSG_ESC="$(json_escape "$ERROR_MESSAGE")"
 STEP_ESC="$(json_escape "$STEP")"
 SESSION_ESC="$(json_escape "$SESSION_ID")"
+OS_ESC="$(json_escape "$OS")"
+ARCH_ESC="$(json_escape "$ARCH")"
+EVENT_TYPE_ESC="$(json_escape "$EVENT_TYPE")"
+REPO_SLUG_ESC="$(json_escape "$REPO_SLUG")"
+REPO_BRANCH_ESC="$(json_escape "$REPO_BRANCH")"
 
-# Cap error_detail at 160 chars to avoid blowing up the row
-if [ ${#ERROR_ESC} -gt 160 ]; then
-  ERROR_ESC="$(printf '%s' "$ERROR_ESC" | cut -c1-160)"
+# Cap error_message at 400 chars (was 160 — give debuggers more room)
+if [ ${#ERROR_MSG_ESC} -gt 400 ]; then
+  ERROR_MSG_ESC="$(printf '%s' "$ERROR_MSG_ESC" | cut -c1-400)"
+fi
+# Cap error_class at 60 chars (it should be a short tag, not prose)
+if [ ${#ERROR_CLASS_ESC} -gt 60 ]; then
+  ERROR_CLASS_ESC="$(printf '%s' "$ERROR_CLASS_ESC" | cut -c1-60)"
 fi
 
 # Duration: must be a non-negative integer or "null"
@@ -149,20 +210,30 @@ if [ -n "$DURATION" ]; then
 fi
 
 # Optional string fields: "" → null in JSON
-ERROR_JSON="null"
-[ -n "$ERROR_ESC" ] && ERROR_JSON="\"$ERROR_ESC\""
-STEP_JSON="null"
-[ -n "$STEP_ESC" ] && STEP_JSON="\"$STEP_ESC\""
-SESSION_JSON="null"
-[ -n "$SESSION_ESC" ] && SESSION_JSON="\"$SESSION_ESC\""
+js_field() { [ -n "$1" ] && echo "\"$1\"" || echo "null"; }
+
+ERROR_CLASS_JSON="$(js_field "$ERROR_CLASS_ESC")"
+ERROR_MSG_JSON="$(js_field "$ERROR_MSG_ESC")"
+STEP_JSON="$(js_field "$STEP_ESC")"
+SESSION_JSON="$(js_field "$SESSION_ESC")"
+SKILL_VER_JSON="$(js_field "$SKILL_VER_ESC")"
+REPO_SLUG_JSON="$(js_field "$REPO_SLUG_ESC")"
+REPO_BRANCH_JSON="$(js_field "$REPO_BRANCH_ESC")"
 
 # installation_id: "" → null (anonymous mode), else the UUID
 INSTALL_JSON="null"
 [ -n "$INSTALL_ID" ] && INSTALL_JSON="\"$INSTALL_ID\""
 
 # ─── Append one JSON line (atomic single-line >> on POSIX) ───
-printf '{"ts":"%s","skill":"%s","outcome":"%s","duration_s":%s,"error_detail":%s,"step":%s,"session_id":%s,"installation_id":%s}\n' \
-  "$TS" "$SKILL_ESC" "$OUTCOME" "$DUR_JSON" "$ERROR_JSON" "$STEP_JSON" "$SESSION_JSON" "$INSTALL_JSON" \
+# Schema v3: adds event_type, sessions, source. Plus local-only
+# _repo_slug + _branch (telemetry-sync strips these before upload).
+# source="live" — telemetry-sync flips this to "replay" if it pushes
+# events more than 5 minutes old.
+printf '{"v":3,"ts":"%s","event_type":"%s","skill":"%s","skill_version":%s,"outcome":"%s","duration_s":%s,"error_class":%s,"error_message":%s,"step":%s,"session_id":%s,"installation_id":%s,"os":"%s","arch":"%s","sessions":%s,"source":"live","_repo_slug":%s,"_branch":%s}\n' \
+  "$TS" "$EVENT_TYPE_ESC" "$SKILL_ESC" "$SKILL_VER_JSON" "$OUTCOME" "$DUR_JSON" \
+  "$ERROR_CLASS_JSON" "$ERROR_MSG_JSON" "$STEP_JSON" "$SESSION_JSON" "$INSTALL_JSON" \
+  "$OS_ESC" "$ARCH_ESC" "$CONCURRENT_SESSIONS" \
+  "$REPO_SLUG_JSON" "$REPO_BRANCH_JSON" \
   >> "$JSONL_FILE" 2>/dev/null || true
 
 # ─── Fire background sync (non-blocking) ─────────────────────

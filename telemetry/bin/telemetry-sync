@@ -24,6 +24,31 @@ set -uo pipefail
 # ─── Master kill switch ──────────────────────────────────────
 [ "${SKILL_TELEMETRY:-on}" = "off" ] && exit 0
 
+# ─── Single-flight lock ──────────────────────────────────────
+# telemetry-log fires this in background AND user might run it manually;
+# without a lock those can race on the cursor file → double-send.
+# flock -n returns immediately if locked → second invocation exits.
+SKILL="${SKILL:-}"
+[ -z "$SKILL" ] && exit 0
+LOCK_DIR="${SKILL_TELEMETRY_DIR:-$HOME/.${SKILL}}/telemetry"
+mkdir -p "$LOCK_DIR" 2>/dev/null || exit 0
+LOCKFILE="$LOCK_DIR/.sync.lock"
+
+# Open FD 9, try to grab lock without waiting. flock may not exist on
+# bare-bones systems — fall back to a check-and-set with a stale guard.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCKFILE"
+  flock -n 9 || exit 0
+else
+  # Best-effort PID lock; treat as stale if older than 60s
+  if [ -f "$LOCKFILE" ]; then
+    LOCK_AGE=$(($(date +%s) - $(stat -f %m "$LOCKFILE" 2>/dev/null || stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0)))
+    [ "$LOCK_AGE" -lt 60 ] && exit 0
+  fi
+  echo "$$" > "$LOCKFILE" 2>/dev/null || exit 0
+  trap 'rm -f "$LOCKFILE"' EXIT
+fi
+
 # ─── Skill name required ─────────────────────────────────────
 SKILL="${SKILL:-}"
 [ -z "$SKILL" ] && exit 0
@@ -85,11 +110,38 @@ UNSENT="$(tail -n "+$SKIP" "$JSONL_FILE" 2>/dev/null || true)"
 BATCH="["
 FIRST=true
 COUNT=0
+NOW_EPOCH=$(date +%s)
 while IFS= read -r LINE; do
   [ -z "$LINE" ] && continue
   echo "$LINE" | grep -q '^{' || continue
+
+  # ── Strip local-only fields before sending (gstack parity) ──
+  # _repo_slug and _branch stay on the user's machine for their own
+  # debugging. Author sees nothing of which repo the user was in.
+  CLEAN_LINE=$(echo "$LINE" | sed \
+    -e 's/,"_repo_slug":"[^"]*"//g' \
+    -e 's/,"_repo_slug":null//g' \
+    -e 's/,"_branch":"[^"]*"//g' \
+    -e 's/,"_branch":null//g')
+
+  # ── Mark as "replay" if event is >5 minutes old ─────────────
+  # telemetry-log writes source="live"; if we're sending an event
+  # whose ts is stale, flip to "replay" so the author can tell
+  # real-time activity apart from catchup syncs.
+  EVENT_TS=$(echo "$CLEAN_LINE" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
+  if [ -n "$EVENT_TS" ]; then
+    # Try GNU date first, then BSD date (macOS)
+    EVENT_EPOCH=$(date -d "$EVENT_TS" +%s 2>/dev/null || \
+                  date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EVENT_TS" +%s 2>/dev/null || \
+                  echo "$NOW_EPOCH")
+    AGE=$(( NOW_EPOCH - EVENT_EPOCH ))
+    if [ "$AGE" -gt 300 ]; then
+      CLEAN_LINE=$(echo "$CLEAN_LINE" | sed 's/"source":"live"/"source":"replay"/')
+    fi
+  fi
+
   if [ "$FIRST" = "true" ]; then FIRST=false; else BATCH="$BATCH,"; fi
-  BATCH="$BATCH$LINE"
+  BATCH="$BATCH$CLEAN_LINE"
   COUNT=$(( COUNT + 1 ))
   [ "$COUNT" -ge 100 ] && break
 done <<< "$UNSENT"
@@ -107,8 +159,11 @@ HTTP_CODE="$(curl -s -w '%{http_code}' --max-time 10 \
 
 case "$HTTP_CODE" in
   2*)
-    # Advance cursor only on success
-    echo "$((CURSOR + COUNT))" > "$CURSOR_FILE" 2>/dev/null || true
+    # Advance cursor atomically (tmp + mv, never partial-write)
+    NEW_CURSOR=$((CURSOR + COUNT))
+    TMP_CURSOR="$(mktemp "${CURSOR_FILE}.XXXXXX")" || exit 0
+    echo "$NEW_CURSOR" > "$TMP_CURSOR" 2>/dev/null
+    mv -f "$TMP_CURSOR" "$CURSOR_FILE" 2>/dev/null || rm -f "$TMP_CURSOR"
     touch "$RATE_FILE" 2>/dev/null || true
     ;;
   *)
