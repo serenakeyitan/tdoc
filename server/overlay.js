@@ -371,25 +371,25 @@
   .tdoc-comment-pill {
     position: absolute !important; z-index: 999998 !important;
     background: #1652f0 !important; color: #fff !important;
-    font: 600 12px system-ui !important;
-    padding: 6px 12px !important;
+    font: 600 11px system-ui !important;
+    padding: 4px 10px !important;
     border: none !important; border-radius: 999px !important;
     cursor: pointer !important;
-    box-shadow: 0 2px 10px rgba(22,82,240,0.45) !important;
-    display: inline-flex !important; align-items: center !important; gap: 5px !important;
-    transition: transform .12s, background-color .12s, box-shadow .12s !important;
+    box-shadow: 0 2px 8px rgba(22,82,240,0.38) !important;
+    display: inline-flex !important; align-items: center !important; gap: 4px !important;
+    transition: transform .12s, background-color .12s, box-shadow .12s, opacity .12s !important;
     line-height: 1 !important;
     text-decoration: none !important;
-    /* Make sure no doc reset can hide it */
-    opacity: 1 !important; visibility: visible !important;
+    opacity: 0.92 !important; visibility: visible !important;
   }
   .tdoc-comment-pill:hover {
     background: #1245d0 !important; color: #fff !important;
+    opacity: 1 !important;
     transform: translateY(-1px) !important;
-    box-shadow: 0 4px 14px rgba(22,82,240,0.55) !important;
+    box-shadow: 0 4px 12px rgba(22,82,240,0.50) !important;
   }
   .tdoc-comment-pill:active { background: #0f3bb0 !important; transform: translateY(0) !important; }
-  .tdoc-comment-pill svg { width: 13px !important; height: 13px !important; flex-shrink: 0 !important; stroke: #fff !important; }
+  .tdoc-comment-pill svg { width: 12px !important; height: 12px !important; flex-shrink: 0 !important; stroke: #fff !important; }
   .tdoc-drag-marquee { position: absolute; pointer-events: none; z-index: 999997; border: 1.5px solid #1652f0; background: rgba(22,82,240,0.1); box-sizing: border-box; }
 
   /* Popup (new-comment) */
@@ -2125,7 +2125,15 @@
   // self-contained block the author composed. The entire section is one
   // unit: hovering anywhere inside it targets the same section, so the
   // Comment affordance never jumps as the cursor moves within it.
-  const SECTION_MEDIA = 'img, svg, canvas, video, iframe[src]';
+  // Resolves the COMMENTABLE artifact a hovered node belongs to.
+  //
+  // Old version was hard-coded around "must contain a media leaf
+  // (img/svg/canvas/video)". That excluded the v0.1.54 cases — semantic
+  // blocks (<section>, <table>, etc.) and author opt-in (data-tdoc-artifact)
+  // can be commentable WITHOUT containing any media. This rewrite mirrors
+  // the COMMENTABLE selector exactly: an artifact is anything COMMENTABLE
+  // (either as the hovered element itself, an ancestor of it, or a
+  // commentable wrapper around a media leaf that IS the hovered element).
   function artifactSectionOf(node) {
     if (!node || node.nodeType !== 1) return null;
     if (isInUI(node) || (node.closest && node.closest(UI_ALL))) return null;
@@ -2134,58 +2142,35 @@
       const anchored = node.closest('[data-tdoc-anchored]');
       if (anchored) return anchored;
     }
-    // A standalone media element / <figure> / <pre> with no composing
-    // wrapper is itself the section (handled by resolveArtifact climbing).
-    // General case: walk up; the section is the OUTERMOST ancestor that
-    // (a) is inside the content column (not the content root / a full-
-    // bleed band), and (b) still contains at least one media element.
-    let el = node;
-    let section = null;
-    let guard = 0;
-    while (el && el !== document.body && el.nodeType === 1 && guard++ < 30) {
-      if (el.matches && el.matches(ARTICLE_ROOT_SEL)) break;
-      if (el.closest && (el.closest(UI_ALL) || isInUI(el))) break;
-      const parent = el.parentElement;
-      if (!parent || parent === document.body) break;
-      if (parent.matches && parent.matches(ARTICLE_ROOT_SEL)) {
-        // `el` is a direct child of the content root: it's the top-level
-        // block. It's a section only if it actually contains media.
-        if (
-          (el.querySelector && el.querySelector(SECTION_MEDIA)) ||
-          (el.matches && el.matches(SECTION_MEDIA)) ||
-          (el.tagName && el.tagName.toLowerCase() === 'figure') ||
-          (el.tagName && el.tagName.toLowerCase() === 'pre')
-        ) {
-          section = el;
+    // 1. Direct hit: the hovered node IS a commentable artifact, OR it's
+    //    inside one. closest() finds the NEAREST commentable ancestor.
+    const direct = node.matches && node.matches(COMMENTABLE)
+      ? node
+      : (node.closest && node.closest(COMMENTABLE));
+    if (direct && !isInUI(direct) && !(direct.matches && direct.matches(ARTICLE_ROOT_SEL))) {
+      // Prefer the OUTERMOST commentable wrapper to handle the nesting case
+      // (e.g. a card containing a media SVG — comment on the card, not the
+      // svg, when the user hovers anywhere in the card). Climb past inner
+      // commentables only when they're enclosed in another commentable
+      // that's still inside the content column.
+      let best = direct;
+      let cur = direct.parentElement;
+      let guard = 0;
+      while (cur && cur !== document.body && guard++ < 20) {
+        if (cur.matches && cur.matches(ARTICLE_ROOT_SEL)) break;
+        if (cur.closest && (cur.closest(UI_ALL) || isInUI(cur))) break;
+        if (cur.matches && cur.matches(COMMENTABLE) && !isFullWidthBand(cur)) {
+          best = cur;
         }
-        break;
+        cur = cur.parentElement;
       }
-      // Promote `el` to a candidate section if it holds media and is not a
-      // full-bleed band (a centered showcase wrapper that spans the column
-      // is NOT the artifact; the framed block inside it is — resolveArtifact
-      // refines that). We keep climbing to find the OUTERMOST such block.
-      const holdsMedia =
-        (el.querySelector && el.querySelector(SECTION_MEDIA)) ||
-        (el.matches && el.matches(SECTION_MEDIA)) ||
-        (el.tagName && (el.tagName.toLowerCase() === 'figure' || el.tagName.toLowerCase() === 'pre'));
-      if (holdsMedia && !isFullWidthBand(el)) section = el;
-      el = parent;
+      // resolveArtifact does final refinement (visual-box detection inside
+      // the chosen section); honor it but only if it stays inside `best`.
+      const refined = resolveArtifact(best);
+      return (refined && best.contains && best.contains(refined)) ? refined : best;
     }
-    if (!section) return null;
-    // Refine to the tight visual box: if the section wraps a single inner
-    // visual frame (e.g. a full-width .phone-stage around .phone), prefer
-    // the inner framed box so the anchor hugs the actual mockup.
-    const media =
-      (section.matches && section.matches(SECTION_MEDIA))
-        ? section
-        : (section.querySelector && section.querySelector(SECTION_MEDIA));
-    if (media) {
-      const refined = resolveArtifact(media);
-      if (refined && section.contains && section.contains(refined)) {
-        return refined;
-      }
-    }
-    return section;
+    // 2. Nothing commentable in this hover path. Don't show a pill.
+    return null;
   }
   function rectsOverlap(a, b) { return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom); }
   function findArtifactIntersecting(dragRect) {
