@@ -70,8 +70,14 @@
   // packed. The narrow visual mode lives at the bottom and overrides base.
   const css = `
   /* Layout */
-  body { padding-top: 44px !important; padding-bottom: 24px; -webkit-user-select: none; user-select: none; }
-  body p,body h1,body h2,body h3,body h4,body h5,body h6,body li,body blockquote,body pre,body code,body figcaption,body th,body td,body dt,body dd,body summary,body span,body em,body strong,body i,body b,body u,body s,body a,body small,body sub,body sup,body mark,body textarea,body input[type="text"],body input[type="search"],body [contenteditable] { -webkit-user-select: text; user-select: text; }
+  /* Default: text is selectable everywhere in the document body, so users
+     can highlight prose inside any container (including custom-div-wrapped
+     artifacts like transcript panes). UI chrome opts out explicitly via
+     .tdoc-* selectors below. Media artifacts (img/svg/canvas/video) are
+     non-selectable by their nature so they don't need an exception. */
+  body { padding-top: 44px !important; padding-bottom: 24px; -webkit-user-select: text; user-select: text; }
+  body .tdoc-bar, body .tdoc-bar *, body #tdoc-comment-layer, body #tdoc-comment-layer *, body .tdoc-hover-outline, body .tdoc-comment-pill, body .tdoc-emoji-picker, body .tdoc-secondary-menu, body .tdoc-anchor-mark.tdoc-anchor-mark-element, body .tdoc-drag-marquee, body .tdoc-modal, body .tdoc-modal * { -webkit-user-select: none !important; user-select: none !important; }
+  body .tdoc-modal .code, body .tdoc-modal textarea, body .tdoc-modal input { -webkit-user-select: text !important; user-select: text !important; }
   /* Reserve the 320px comment column on the right. The article centers
      itself inside the remaining (viewport - 320px) space via margin auto
      (applied below in :where()). Adding a left padding keeps it from
@@ -2357,11 +2363,12 @@
   }, true);
 
   function maybeOpenSelectionPopup(target) {
-    if (target && target.nodeType === 1) {
-      if (isInUI(target)) return;
-      const commentable = target.matches?.(COMMENTABLE) ? target : target.closest?.(COMMENTABLE);
-      if (commentable && !isInUI(commentable)) return;
-    }
+    // Selected text wins over "comment whole artifact." If there's a real text
+    // selection, open the text-selection popup regardless of whether the
+    // selection lives inside a commentable artifact. The hover pill remains
+    // the path for "comment on the whole artifact" — they don't compete
+    // because they're driven by different gestures (hover vs. drag-select).
+    if (target && target.nodeType === 1 && isInUI(target)) return;
     const sel = window.getSelection();
     const text = sel && sel.toString().trim();
     if (!text || text.length < 2 || !sel.rangeCount) return;
