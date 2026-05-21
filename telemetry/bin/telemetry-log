@@ -111,6 +111,17 @@ ANALYTICS_DIR="$STATE_DIR/telemetry"
 JSONL_FILE="$ANALYTICS_DIR/$(date -u +%Y-%m-%d).jsonl"
 ID_FILE="$ANALYTICS_DIR/installation-id"
 
+# ─── Self-healing: clear THIS session's pending marker ───────
+# The SKILL.md preamble writes a .pending-<session> marker; the
+# Final Step is supposed to delete it. If Claude logged a real event
+# via this script, the run was NOT skipped — so clear our own marker
+# here too (belt-and-suspenders; harmless if the marker is absent).
+# We do NOT reap other sessions' markers here — that's the preamble's
+# job, and reaping here would risk a recursion (reap → telemetry-log).
+if [ -n "$SESSION_ID" ]; then
+  rm -f "$ANALYTICS_DIR/pending/.pending-$SESSION_ID" 2>/dev/null || true
+fi
+
 mkdir -p "$ANALYTICS_DIR" 2>/dev/null || exit 0
 
 # ─── Installation ID (UUIDv4, generated once per machine per skill) ──

@@ -549,6 +549,35 @@ if [ "$TEL_EFFECTIVE" != "off" ]; then
   mkdir -p "$TEL_HOME/sentinels"
   date +%s > "$TEL_HOME/sentinels/$TEL_SESSION_ID"
   find "$TEL_HOME/sentinels" -type f -mtime +1 -delete 2>/dev/null || true
+
+  # ── Self-healing pending marker (gstack pattern) ──
+  # Write a .pending marker for THIS session. The Final Step deletes it.
+  # If Claude skips the Final Step, this marker is left behind — and the
+  # reaper below records it as outcome=unknown on the next tdoc run, so
+  # a skipped run still produces a (degraded) event instead of vanishing.
+  PENDING_DIR="$TEL_HOME/telemetry/pending"
+  mkdir -p "$PENDING_DIR"
+  TEL_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"skill":"tdoc","ts":"%s","session_id":"%s"}\n' \
+    "$TEL_TS" "$TEL_SESSION_ID" > "$PENDING_DIR/.pending-$TEL_SESSION_ID"
+
+  # Reap stale markers from prior skipped runs (any session but ours)
+  for _PF in "$PENDING_DIR"/.pending-*; do
+    [ -f "$_PF" ] || continue
+    _PF_SID="$(basename "$_PF")"; _PF_SID="${_PF_SID#.pending-}"
+    [ "$_PF_SID" = "$TEL_SESSION_ID" ] && continue
+    _PDATA="$(cat "$_PF" 2>/dev/null || true)"
+    rm -f "$_PF" 2>/dev/null || true
+    [ -z "$_PDATA" ] && continue
+    _P_SKILL="$(echo "$_PDATA" | grep -o '"skill":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    _P_SID="$(echo "$_PDATA" | grep -o '"session_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    [ -z "$_P_SKILL" ] && continue
+    if [ -x "__TDOC_DIR__/telemetry/bin/telemetry-log" ]; then
+      "__TDOC_DIR__/telemetry/bin/telemetry-log" \
+        --skill "$_P_SKILL" --outcome unknown \
+        --step "reaped-incomplete-run" --session-id "$_P_SID" 2>/dev/null || true
+    fi
+  done
 fi
 
 # ─── Upgrade check (gstack-style lifecycle event) ───────────
@@ -644,6 +673,10 @@ END=$(date +%s)
 START=$(cat "$TEL_HOME/sentinels/$TEL_SESSION_ID" 2>/dev/null || echo "$END")
 DURATION=$(( END - START ))
 rm -f "$TEL_HOME/sentinels/$TEL_SESSION_ID"
+
+# Clear THIS session's pending marker — we're about to log the real
+# event, so the self-healing reaper must not later treat it as orphaned.
+rm -f "$TEL_HOME/telemetry/pending/.pending-$TEL_SESSION_ID" 2>/dev/null
 
 TEL_EFFECTIVE="${SKILL_TELEMETRY:-$(cat "$TEL_HOME/.telemetry-mode" 2>/dev/null || echo on)}"
 ```
