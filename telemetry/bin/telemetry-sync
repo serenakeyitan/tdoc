@@ -56,9 +56,6 @@ SKILL="${SKILL:-}"
 # ─── Resolve paths ───────────────────────────────────────────
 STATE_DIR="${SKILL_TELEMETRY_DIR:-$HOME/.${SKILL}}"
 ANALYTICS_DIR="$STATE_DIR/telemetry"
-DAY="$(date -u +%Y-%m-%d)"
-JSONL_FILE="$ANALYTICS_DIR/$DAY.jsonl"
-CURSOR_FILE="$ANALYTICS_DIR/.cursor-$DAY"
 RATE_FILE="$ANALYTICS_DIR/.last-sync"
 
 # Locate config: env override > skill-local config > template default
@@ -73,9 +70,6 @@ ANON_KEY="${SKILL_TELEMETRY_ANON_KEY:-}"
 [ -z "$SUPABASE_URL" ] && exit 0
 [ -z "$ANON_KEY" ] && exit 0
 
-# No JSONL → nothing to send
-[ -f "$JSONL_FILE" ] || exit 0
-
 # ─── Rate limit ──────────────────────────────────────────────
 RATE_MINUTES="${SKILL_TELEMETRY_RATE_MINUTES:-5}"
 case "$RATE_MINUTES" in
@@ -86,90 +80,110 @@ if [ -f "$RATE_FILE" ]; then
   [ -z "$STALE" ] && exit 0
 fi
 
-# ─── Cursor (lines already sent) ─────────────────────────────
-CURSOR=0
-if [ -f "$CURSOR_FILE" ]; then
-  CURSOR="$(cat "$CURSOR_FILE" 2>/dev/null | tr -d ' \n\r\t')"
-  case "$CURSOR" in *[!0-9]*) CURSOR=0 ;; esac
-fi
+# ─── Find all JSONL files with unsent data ──────────────────
+# Iterate every <YYYY-MM-DD>.jsonl in the analytics dir, not just
+# today's. Yesterday's events were getting stranded if user was
+# offline at the day rollover (B1 from external audit).
+JSONL_FILES=$(find "$ANALYTICS_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | sort || true)
+[ -z "$JSONL_FILES" ] && exit 0
 
-TOTAL="$(wc -l < "$JSONL_FILE" 2>/dev/null | tr -d ' \n\r\t')"
-case "$TOTAL" in ''|*[!0-9]*) TOTAL=0 ;; esac
-
-# Cursor past end (file rotated, etc) → reset
-if [ "$CURSOR" -gt "$TOTAL" ] 2>/dev/null; then
-  CURSOR=0
-fi
-[ "$CURSOR" -ge "$TOTAL" ] 2>/dev/null && exit 0
-
-# ─── Read unsent lines (cap batch at 100) ────────────────────
-SKIP=$(( CURSOR + 1 ))
-UNSENT="$(tail -n "+$SKIP" "$JSONL_FILE" 2>/dev/null || true)"
-[ -z "$UNSENT" ] && exit 0
-
-BATCH="["
-FIRST=true
-COUNT=0
+TOTAL_SENT=0
 NOW_EPOCH=$(date +%s)
-while IFS= read -r LINE; do
-  [ -z "$LINE" ] && continue
-  echo "$LINE" | grep -q '^{' || continue
 
-  # ── Strip local-only fields before sending (gstack parity) ──
-  # _repo_slug and _branch stay on the user's machine for their own
-  # debugging. Author sees nothing of which repo the user was in.
-  CLEAN_LINE=$(echo "$LINE" | sed \
-    -e 's/,"_repo_slug":"[^"]*"//g' \
-    -e 's/,"_repo_slug":null//g' \
-    -e 's/,"_branch":"[^"]*"//g' \
-    -e 's/,"_branch":null//g')
+for JSONL_FILE in $JSONL_FILES; do
+  # Derive cursor file name from JSONL filename
+  DAY=$(basename "$JSONL_FILE" .jsonl)
+  CURSOR_FILE="$ANALYTICS_DIR/.cursor-$DAY"
 
-  # ── Mark as "replay" if event is >5 minutes old ─────────────
-  # telemetry-log writes source="live"; if we're sending an event
-  # whose ts is stale, flip to "replay" so the author can tell
-  # real-time activity apart from catchup syncs.
-  EVENT_TS=$(echo "$CLEAN_LINE" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
-  if [ -n "$EVENT_TS" ]; then
-    # Try GNU date first, then BSD date (macOS)
-    EVENT_EPOCH=$(date -d "$EVENT_TS" +%s 2>/dev/null || \
-                  date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EVENT_TS" +%s 2>/dev/null || \
-                  echo "$NOW_EPOCH")
-    AGE=$(( NOW_EPOCH - EVENT_EPOCH ))
-    if [ "$AGE" -gt 300 ]; then
-      CLEAN_LINE=$(echo "$CLEAN_LINE" | sed 's/"source":"live"/"source":"replay"/')
-    fi
+  # ── Cursor (lines already sent) ──
+  CURSOR=0
+  if [ -f "$CURSOR_FILE" ]; then
+    CURSOR="$(cat "$CURSOR_FILE" 2>/dev/null | tr -d ' \n\r\t')"
+    case "$CURSOR" in *[!0-9]*) CURSOR=0 ;; esac
   fi
 
-  if [ "$FIRST" = "true" ]; then FIRST=false; else BATCH="$BATCH,"; fi
-  BATCH="$BATCH$CLEAN_LINE"
-  COUNT=$(( COUNT + 1 ))
-  [ "$COUNT" -ge 100 ] && break
-done <<< "$UNSENT"
-BATCH="$BATCH]"
-[ "$COUNT" -eq 0 ] && exit 0
+  TOTAL="$(wc -l < "$JSONL_FILE" 2>/dev/null | tr -d ' \n\r\t')"
+  case "$TOTAL" in ''|*[!0-9]*) TOTAL=0 ;; esac
 
-# ─── POST to edge function ───────────────────────────────────
-HTTP_CODE="$(curl -s -w '%{http_code}' --max-time 10 \
-  -X POST "${SUPABASE_URL}/functions/v1/skill-telemetry-ingest" \
-  -H "Content-Type: application/json" \
-  -H "apikey: ${ANON_KEY}" \
-  -H "Authorization: Bearer ${ANON_KEY}" \
-  -o /dev/null \
-  -d "$BATCH" 2>/dev/null || echo "000")"
+  if [ "$CURSOR" -gt "$TOTAL" ] 2>/dev/null; then
+    CURSOR=0
+  fi
+  [ "$CURSOR" -ge "$TOTAL" ] 2>/dev/null && continue   # nothing unsent in this file
 
-case "$HTTP_CODE" in
-  2*)
-    # Advance cursor atomically (tmp + mv, never partial-write)
-    NEW_CURSOR=$((CURSOR + COUNT))
-    TMP_CURSOR="$(mktemp "${CURSOR_FILE}.XXXXXX")" || exit 0
-    echo "$NEW_CURSOR" > "$TMP_CURSOR" 2>/dev/null
-    mv -f "$TMP_CURSOR" "$CURSOR_FILE" 2>/dev/null || rm -f "$TMP_CURSOR"
-    touch "$RATE_FILE" 2>/dev/null || true
-    ;;
-  *)
-    # Failure: leave cursor, just update rate-limit so we don't hammer
-    touch "$RATE_FILE" 2>/dev/null || true
-    ;;
-esac
+  # ── Read unsent lines (cap batch at 100 PER FILE) ──
+  SKIP=$(( CURSOR + 1 ))
+  UNSENT="$(tail -n "+$SKIP" "$JSONL_FILE" 2>/dev/null || true)"
+  [ -z "$UNSENT" ] && continue
+
+  BATCH="["
+  FIRST=true
+  COUNT=0
+  while IFS= read -r LINE; do
+    [ -z "$LINE" ] && continue
+    echo "$LINE" | grep -q '^{' || continue
+
+    # ── Strip local-only fields before sending (gstack parity) ──
+    # Prefer jq for correctness (handles escaped quotes). Fall back to
+    # sed if jq unavailable — sed pattern doesn't handle escaped quotes
+    # in repo names, but repo basenames rarely contain quotes.
+    if command -v jq >/dev/null 2>&1; then
+      CLEAN_LINE=$(echo "$LINE" | jq -c 'del(._repo_slug, ._branch)' 2>/dev/null)
+      [ -z "$CLEAN_LINE" ] && CLEAN_LINE="$LINE"  # jq failed → don't drop
+    else
+      CLEAN_LINE=$(echo "$LINE" | sed \
+        -e 's/,"_repo_slug":"[^"]*"//g' \
+        -e 's/,"_repo_slug":null//g' \
+        -e 's/,"_branch":"[^"]*"//g' \
+        -e 's/,"_branch":null//g')
+    fi
+
+    # ── Mark as "replay" if event is >5 minutes old ──
+    EVENT_TS=$(echo "$CLEAN_LINE" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
+    if [ -n "$EVENT_TS" ]; then
+      EVENT_EPOCH=$(date -d "$EVENT_TS" +%s 2>/dev/null || \
+                    date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EVENT_TS" +%s 2>/dev/null || \
+                    echo "$NOW_EPOCH")
+      AGE=$(( NOW_EPOCH - EVENT_EPOCH ))
+      if [ "$AGE" -gt 300 ]; then
+        CLEAN_LINE=$(echo "$CLEAN_LINE" | sed 's/"source":"live"/"source":"replay"/')
+      fi
+    fi
+
+    if [ "$FIRST" = "true" ]; then FIRST=false; else BATCH="$BATCH,"; fi
+    BATCH="$BATCH$CLEAN_LINE"
+    COUNT=$(( COUNT + 1 ))
+    [ "$COUNT" -ge 100 ] && break
+  done <<< "$UNSENT"
+  BATCH="$BATCH]"
+  [ "$COUNT" -eq 0 ] && continue
+
+  # ── POST to edge function ──
+  HTTP_CODE="$(curl -s -w '%{http_code}' --max-time 10 \
+    -X POST "${SUPABASE_URL}/functions/v1/skill-telemetry-ingest" \
+    -H "Content-Type: application/json" \
+    -H "apikey: ${ANON_KEY}" \
+    -H "Authorization: Bearer ${ANON_KEY}" \
+    -o /dev/null \
+    -d "$BATCH" 2>/dev/null || echo "000")"
+
+  case "$HTTP_CODE" in
+    2*)
+      # Advance cursor atomically for THIS file
+      NEW_CURSOR=$((CURSOR + COUNT))
+      TMP_CURSOR="$(mktemp "${CURSOR_FILE}.XXXXXX")" || continue
+      echo "$NEW_CURSOR" > "$TMP_CURSOR" 2>/dev/null
+      mv -f "$TMP_CURSOR" "$CURSOR_FILE" 2>/dev/null || rm -f "$TMP_CURSOR"
+      TOTAL_SENT=$(( TOTAL_SENT + COUNT ))
+      ;;
+    *)
+      # Failure on this file: stop syncing more files this run (likely network issue)
+      touch "$RATE_FILE" 2>/dev/null || true
+      exit 0
+      ;;
+  esac
+done
+
+# Update rate-limit only after we processed all files
+touch "$RATE_FILE" 2>/dev/null || true
 
 exit 0

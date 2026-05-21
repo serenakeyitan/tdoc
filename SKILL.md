@@ -522,12 +522,24 @@ fi
 # ─── Upgrade check (gstack-style lifecycle event) ───────────
 # Check installed version against latest release. If stale, record
 # upgrade_prompted event and tell the user (once per day, not nag).
-TDOC_DIR="$HOME/.claude/skills/tdoc"
-INSTALLED_VERSION=$(cat "$TDOC_DIR/VERSION" 2>/dev/null || echo "0.0.0")
+# TDOC_DIR is substituted at install time by postinstall-telemetry.sh
+# so this works no matter where tdoc is cloned.
+TDOC_DIR="__TDOC_DIR__"
+
+# Resolve installed version, trying multiple sources in order:
+#   1. VERSION file (if maintained, like gstack)
+#   2. git describe --tags (most recent reachable tag)
+#   3. fallback "0.0.0" (skip the check)
+INSTALLED_VERSION="$(cat "$TDOC_DIR/VERSION" 2>/dev/null)"
+if [ -z "$INSTALLED_VERSION" ] && [ -d "$TDOC_DIR/.git" ]; then
+  INSTALLED_VERSION="$(cd "$TDOC_DIR" && git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+fi
+[ -z "$INSTALLED_VERSION" ] && INSTALLED_VERSION="0.0.0"
+
 UPGRADE_CHECK_FLAG="$TEL_HOME/.upgrade-checked-$(date +%Y-%m-%d)"
-if [ "$TEL_EFFECTIVE" != "off" ] && [ ! -f "$UPGRADE_CHECK_FLAG" ]; then
+if [ "$TEL_EFFECTIVE" != "off" ] && [ ! -f "$UPGRADE_CHECK_FLAG" ] && [ "$INSTALLED_VERSION" != "0.0.0" ]; then
   LATEST=$(curl -s --max-time 3 https://api.github.com/repos/serenakeyitan/tdoc/releases/latest 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
-  if [ -n "$LATEST" ] && [ "$LATEST" != "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "0.0.0" ]; then
+  if [ -n "$LATEST" ] && [ "$LATEST" != "$INSTALLED_VERSION" ]; then
     # Fire lifecycle event — author sees how many users have stale installs
     "$TDOC_DIR/telemetry/bin/telemetry-log" \
       --skill tdoc \
