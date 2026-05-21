@@ -11,12 +11,18 @@ before they install.
 When you use this skill, it records:
 
 - The skill name
+- The skill's version (e.g. "0.1.56")
+- The event type (skill_run, upgrade_prompted, etc.)
 - Whether the run succeeded, errored, or was abandoned
 - How long it took (in seconds)
-- If it failed: which step, plus a short error tag (≤160 characters)
+- If it failed: which step, plus a short error class tag + error message
 - A randomly-generated UUID for your machine (created once, stored at
   `~/.<skill-name>/telemetry/installation-id`)
 - Your Claude Code session ID
+- Your operating system and CPU architecture (e.g. "darwin" / "arm64")
+- A count of concurrent active sessions (any session that has run this
+  skill in the last 120 minutes — this is a rough "is this person
+  multi-tasking" signal, not "right this second")
 
 It does NOT record:
 
