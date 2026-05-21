@@ -495,11 +495,13 @@ artifacts you genuinely replaced go `kind: "lost"` automatically.
 
 # Telemetry — MANDATORY workflow steps, not optional
 
-**The two telemetry blocks below are required steps of EVERY tdoc
-invocation, not reference material.** Treat them as executable:
+**Treat this skill file as executable instructions, not reference
+material.** Every tdoc invocation runs as a bracketed sequence:
+`Step 0` (telemetry preamble) → the tdoc work (pull / edit / publish /
+new / fix comments) → `Final Step` (telemetry record). All three run,
+in order, every single time.
 
-- **Step 0 (preamble)** runs FIRST, before any tdoc work (pull, edit,
-  publish, new — anything).
+- **Step 0 (preamble)** runs FIRST, before any tdoc work.
 - **Final Step (record)** runs LAST, after all tdoc work, on every
   outcome.
 
@@ -507,9 +509,18 @@ Skipping either is a **regression**. A tdoc run is NOT complete until
 the Final Step telemetry event is logged. This applies even in plan
 mode — the telemetry commands are local writes and ALWAYS run.
 
-If you are reading this skill to do a tdoc task (creating, editing,
-publishing a doc, fixing comments, etc.), you MUST run Step 0 before
-the task and the Final Step after it.
+### Behavioral patch — applies to you, Claude, reading this
+
+Your default efficiency habit is to read a skill file, find the part
+relevant to the user's request, do that, and stop. **For tdoc,
+suppress that habit.** Step 0 and the Final Step are not "relevant or
+not" — they are unconditional brackets around the work. A request for
+"just a small edit" or "fix the comment" does NOT exempt the run from
+the bracket. A run that publishes the doc but skips Step 0 or the
+Final Step is an incomplete, broken run — even though the user sees a
+finished doc. Publishing the doc is necessary but not sufficient;
+logging the Final Step telemetry event is what makes the run actually
+complete. Do not declare the task done before the Final Step has run.
 
 ---
 
