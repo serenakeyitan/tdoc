@@ -124,11 +124,16 @@ for JSONL_FILE in $JSONL_FILES; do
 
     # ── Strip local-only fields before sending (gstack parity) ──
     # Prefer jq for correctness (handles escaped quotes). Fall back to
-    # sed if jq unavailable — sed pattern doesn't handle escaped quotes
-    # in repo names, but repo basenames rarely contain quotes.
+    # sed if jq unavailable.
+    # IMPORTANT: if jq fails, SKIP the line rather than send it raw
+    # (raw contains _repo_slug/_branch we promised to strip).
     if command -v jq >/dev/null 2>&1; then
       CLEAN_LINE=$(echo "$LINE" | jq -c 'del(._repo_slug, ._branch)' 2>/dev/null)
-      [ -z "$CLEAN_LINE" ] && CLEAN_LINE="$LINE"  # jq failed → don't drop
+      if [ -z "$CLEAN_LINE" ]; then
+        # jq failed (malformed JSON?) — skip rather than leak
+        COUNT=$(( COUNT + 1 ))  # advance cursor; corrupted line can't be retried
+        continue
+      fi
     else
       CLEAN_LINE=$(echo "$LINE" | sed \
         -e 's/,"_repo_slug":"[^"]*"//g' \
@@ -138,10 +143,13 @@ for JSONL_FILE in $JSONL_FILES; do
     fi
 
     # ── Mark as "replay" if event is >5 minutes old ──
+    # CRITICAL: parse in UTC. macOS `date -j -f` doesn't honor the "Z"
+    # suffix on its own — TZ=UTC forces correct interpretation. GNU
+    # date -d handles "Z" natively but TZ=UTC is harmless there.
     EVENT_TS=$(echo "$CLEAN_LINE" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
     if [ -n "$EVENT_TS" ]; then
-      EVENT_EPOCH=$(date -d "$EVENT_TS" +%s 2>/dev/null || \
-                    date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EVENT_TS" +%s 2>/dev/null || \
+      EVENT_EPOCH=$(TZ=UTC date -d "$EVENT_TS" +%s 2>/dev/null || \
+                    TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EVENT_TS" +%s 2>/dev/null || \
                     echo "$NOW_EPOCH")
       AGE=$(( NOW_EPOCH - EVENT_EPOCH ))
       if [ "$AGE" -gt 300 ]; then
