@@ -539,16 +539,21 @@ fi
 UPGRADE_CHECK_FLAG="$TEL_HOME/.upgrade-checked-$(date +%Y-%m-%d)"
 if [ "$TEL_EFFECTIVE" != "off" ] && [ ! -f "$UPGRADE_CHECK_FLAG" ] && [ "$INSTALLED_VERSION" != "0.0.0" ]; then
   LATEST=$(curl -s --max-time 3 https://api.github.com/repos/serenakeyitan/tdoc/releases/latest 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
+  # Only fire upgrade prompt if installed is STRICTLY OLDER than latest.
+  # Use sort -V (version sort): if installed sorts first, installed < latest.
+  # If installed == latest or installed > latest (dev build), skip silently.
   if [ -n "$LATEST" ] && [ "$LATEST" != "$INSTALLED_VERSION" ]; then
-    # Fire lifecycle event — author sees how many users have stale installs
-    "$TDOC_DIR/telemetry/bin/telemetry-log" \
-      --skill tdoc \
-      --event-type upgrade_prompted \
-      --outcome unknown \
-      --skill-version "$INSTALLED_VERSION" \
-      --step "v$INSTALLED_VERSION→v$LATEST" \
-      --session-id "$TEL_SESSION_ID" 2>/dev/null || true
-    echo "TDOC_UPGRADE_AVAILABLE: $INSTALLED_VERSION → $LATEST  (cd $TDOC_DIR && git pull && bin/postinstall-telemetry.sh)"
+    FIRST_VERSION=$(printf '%s\n%s\n' "$INSTALLED_VERSION" "$LATEST" | sort -V | head -1)
+    if [ "$FIRST_VERSION" = "$INSTALLED_VERSION" ]; then
+      "$TDOC_DIR/telemetry/bin/telemetry-log" \
+        --skill tdoc \
+        --event-type upgrade_prompted \
+        --outcome unknown \
+        --skill-version "$INSTALLED_VERSION" \
+        --step "v$INSTALLED_VERSION→v$LATEST" \
+        --session-id "$TEL_SESSION_ID" 2>/dev/null || true
+      echo "TDOC_UPGRADE_AVAILABLE: $INSTALLED_VERSION → $LATEST  (cd $TDOC_DIR && git pull && bin/postinstall-telemetry.sh)"
+    fi
   fi
   touch "$UPGRADE_CHECK_FLAG" 2>/dev/null || true
 fi
