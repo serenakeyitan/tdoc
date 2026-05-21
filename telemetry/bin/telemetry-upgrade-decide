@@ -43,7 +43,16 @@ case "$ACTION" in
       exit 1
     fi
     # Escalating backoff: first snooze 24h, second 48h, third+ 168h (1 week)
-    EXISTING_SNOOZES=$(grep -c "^$VERSION " "$SNOOZE_FILE" 2>/dev/null || echo 0)
+    # NOTE: grep -c prints "0" on no-match AND exits non-zero. The previous
+    # `|| echo 0` fallback ran in addition, producing the two-line string
+    # "0\n0" which fell through to the "*" case (168h instead of 24h).
+    # Fix: redirect stderr but accept grep's "0" output as authoritative.
+    if [ -f "$SNOOZE_FILE" ]; then
+      EXISTING_SNOOZES=$(grep -c "^$VERSION " "$SNOOZE_FILE" 2>/dev/null)
+      [ -z "$EXISTING_SNOOZES" ] && EXISTING_SNOOZES=0
+    else
+      EXISTING_SNOOZES=0
+    fi
     case "$EXISTING_SNOOZES" in
       0) HOURS=24 ;;
       1) HOURS=48 ;;
@@ -55,11 +64,14 @@ case "$ACTION" in
     ;;
 
   once)
-    # User chose "Yes, upgrade now" once — apply update but keep mode=ask
-    # so they get re-prompted on NEXT new version
-    # (We don't write the mode file; just bust the cache so next check refires)
+    # User chose "Yes, upgrade now" once. This action only busts the
+    # update-check cache so they re-prompt on the NEXT new version.
+    # The actual upgrade is applied by the host SKILL.md preamble,
+    # which calls `skill-telemetry-update --include <skill>` after
+    # running this command. See SKILL.md.snippet for the pattern.
+    # We deliberately don't write the mode file → stays mode=ask.
     rm -f "$SHARED/.update-check" 2>/dev/null || true
-    echo "✅ Will upgrade this once; will prompt again on next new version"
+    echo "✅ Cache cleared; host skill should now apply update via skill-telemetry-update"
     ;;
 
   ask|reset)

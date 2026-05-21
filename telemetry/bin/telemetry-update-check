@@ -18,8 +18,8 @@
 #   SKILL_TELEMETRY_REMOTE_VERSION — override remote VERSION URL (for testing)
 #   SKILL_TELEMETRY_CHECK_HOURS    — override cache TTL (default: 24)
 #
-# Cached at $SKILL_TELEMETRY_DIR/.update-check
-# Snooze file: $SKILL_TELEMETRY_DIR/.update-snoozed (one version per line)
+# Cached at $SKILL_TELEMETRY_SHARED_DIR/.update-check
+# (Snooze logic lives in telemetry-log, not here.)
 
 set -uo pipefail
 
@@ -32,7 +32,6 @@ SHARED_STATE="${SKILL_TELEMETRY_SHARED_DIR:-$HOME/.skill-telemetry}"
 mkdir -p "$SHARED_STATE" 2>/dev/null || exit 0
 
 CACHE_FILE="$SHARED_STATE/.update-check"
-SNOOZE_FILE="$SHARED_STATE/.update-snoozed"
 
 # Resolve local version. The caller (telemetry-log) passes its own bin
 # directory; from there we find the repo's VERSION file.
@@ -89,15 +88,8 @@ if [ "$HIGHER" = "$LOCAL" ]; then
   exit 0
 fi
 
-# REMOTE is strictly newer
+# REMOTE is strictly newer — cache the answer and emit signal.
+# Snooze enforcement happens in telemetry-log (it knows the right
+# state files and per-version timestamp format).
 echo "UPGRADE_AVAILABLE $LOCAL $REMOTE" > "$CACHE_FILE"
-
-# Snooze check — if user has snoozed this specific version, stay quiet
-if [ -f "$SNOOZE_FILE" ]; then
-  if grep -qx "$REMOTE" "$SNOOZE_FILE" 2>/dev/null; then
-    exit 0
-  fi
-fi
-
-# Emit the upgrade signal
 echo "UPGRADE_AVAILABLE $LOCAL $REMOTE"
