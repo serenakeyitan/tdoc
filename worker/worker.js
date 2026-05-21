@@ -256,19 +256,49 @@ function reconcileAnchors(comments, aidsInVersion) {
     // forever otherwise. So we reconcile applied comments too: bind their
     // aid if we can identify the artifact unambiguously; mark lost if not.
     const a = c.anchor;
+    // Helper: record a (new) aid as the current binding while preserving
+    // every prior aid in `aid_history`. This is the core of cross-version
+    // anchor stability: when an artifact's content hash changes between
+    // versions, the comment gets a fresh aid in the new version but the
+    // OLD aid is still valid in OLDER versions. We never throw away old
+    // bindings — the overlay resolves any aid in history, newest first.
+    const bind = (newAid) => {
+      if (a.aid && a.aid !== newAid) {
+        if (!Array.isArray(a.aid_history)) a.aid_history = [];
+        a.aid_history = [a.aid, ...a.aid_history.filter(x => x && x !== a.aid && x !== newAid)];
+      }
+      a.aid = newAid;
+      // Never let the current aid appear in history.
+      if (Array.isArray(a.aid_history)) {
+        a.aid_history = a.aid_history.filter(x => x && x !== newAid);
+        if (!a.aid_history.length) delete a.aid_history;
+      }
+    };
     // 1. Already aid-anchored → trust it if the aid is still in the doc.
-    //    If the aid is STALE (from a prior version), clear it and fall
-    //    through to the heading/tag-based re-resolution — we may still be
-    //    able to identify the artifact the user meant, and "stale aid"
-    //    should never lock a comment to "lost" forever.
+    //    If the aid is STALE (from a prior version), DON'T delete it —
+    //    push it into aid_history and try to find the current-version aid
+    //    via heading/tag re-resolution. Old viewers of older versions
+    //    still need the original aid to render.
     const knownAid = a.aid
       || (a.selector && /\[data-tdoc-aid="([\w]+)"\]/.exec(a.selector || '')?.[1]);
     if (knownAid) {
       if (byAid.has(knownAid)) continue;       // valid → done
-      // Stale aid: clear it and let the heading/tag matcher try again.
+      // Stale aid: preserve it in history, retry to find current aid.
+      if (!Array.isArray(a.aid_history)) a.aid_history = [];
+      if (!a.aid_history.includes(knownAid)) a.aid_history.unshift(knownAid);
       delete a.aid;
-      a.kind = 'element';                       // un-lose so we can retry
+      a.kind = 'element';
       delete a.reason;
+    }
+    // 1b. Maybe an aid in history matches this version's DOM — if so,
+    //     promote it back to the current binding and we're done.
+    if (Array.isArray(a.aid_history) && a.aid_history.length) {
+      const hit = a.aid_history.find(x => byAid.has(x));
+      if (hit) {
+        a.aid_history = a.aid_history.filter(x => x !== hit);
+        a.aid = hit;
+        continue;
+      }
     }
     // 2. Has a fingerprint — find the aid whose inventory matches the
     //    artifact tag + heading hint best.
@@ -280,13 +310,13 @@ function reconcileAnchors(comments, aidsInVersion) {
       (!wantHead || (x.heading || '').toLowerCase() === wantHead.toLowerCase())
     );
     if (candidates.length === 1) {
-      a.aid = candidates[0].aid;
+      bind(candidates[0].aid);
       continue;
     }
     if (candidates.length === 0) {
       // Try tag-only — if still ambiguous, give up cleanly.
       const tagOnly = aidsInVersion.filter(x => !wantTag || x.tag === wantTag);
-      if (tagOnly.length === 1) { a.aid = tagOnly[0].aid; continue; }
+      if (tagOnly.length === 1) { bind(tagOnly[0].aid); continue; }
       a.kind = 'lost'; a.reason = 'no candidate artifact in new version';
       continue;
     }
@@ -908,13 +938,20 @@ export default {
       // a CI / agent context.
       if (bind_anchor_aid && typeof bind_anchor_aid === 'string') {
         if (!parent.anchor) parent.anchor = {};
-        // preserve fallback if present
         const fallback = parent.anchor.fallback;
+        const priorAid = parent.anchor.aid;
+        const priorHistory = Array.isArray(parent.anchor.aid_history) ? parent.anchor.aid_history : [];
+        // Preserve any aid this comment was previously bound to so older
+        // versions still resolve. See reconcileAnchors for the same rule.
+        const history = [];
+        if (priorAid && priorAid !== bind_anchor_aid) history.push(priorAid);
+        for (const x of priorHistory) if (x && x !== bind_anchor_aid && !history.includes(x)) history.push(x);
         parent.anchor = {
           kind: 'element',
           aid: bind_anchor_aid,
           selector: `[data-tdoc-aid="${bind_anchor_aid}"]`,
           label: parent.anchor.label || 'svg',
+          ...(history.length ? { aid_history: history } : {}),
           ...(fallback ? { fallback } : {}),
         };
       }

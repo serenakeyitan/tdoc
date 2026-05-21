@@ -1017,14 +1017,24 @@
     if (anchor.kind === 'lost') return null;
 
     // 1. IDENTITY-FIRST: anchor.aid is the artifact's content-derived id
-    //    stamped by the worker. Same artifact across versions = same aid.
-    //    A direct hit here is unambiguous and cannot drift.
-    const aid = anchor.aid
-      || (anchor.selector && (/\[data-tdoc-aid="([^"]+)"\]/.exec(anchor.selector) || [])[1]);
-    if (aid) {
-      const byAid = document.querySelector(`[data-tdoc-aid="${aid}"]`);
-      if (byAid) return byAid;
-      // aid recorded but missing in this DOM → unanchored, never fallback.
+    //    stamped by the worker. Same artifact across versions = same aid
+    //    iff its content didn't change. When content DID change between
+    //    versions, the worker mints a new aid in the new version AND
+    //    keeps the old aid in `anchor.aid_history` (newest first) so that
+    //    viewers of OLDER versions still resolve to the same comment.
+    const aidCandidates = [];
+    if (anchor.aid) aidCandidates.push(anchor.aid);
+    if (Array.isArray(anchor.aid_history)) {
+      for (const x of anchor.aid_history) if (x && !aidCandidates.includes(x)) aidCandidates.push(x);
+    }
+    const fromSelector = anchor.selector && (/\[data-tdoc-aid="([^"]+)"\]/.exec(anchor.selector) || [])[1];
+    if (fromSelector && !aidCandidates.includes(fromSelector)) aidCandidates.push(fromSelector);
+    if (aidCandidates.length) {
+      for (const aid of aidCandidates) {
+        const byAid = document.querySelector(`[data-tdoc-aid="${aid}"]`);
+        if (byAid) return byAid;
+      }
+      // Recorded aid(s), none present in this DOM → unanchored, never fallback.
       return null;
     }
 
