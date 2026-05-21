@@ -411,7 +411,26 @@ The overlay applies these as `:where()` defensive defaults so old docs degrade g
 
 ### Comment anchor stability (important for `/tdoc edit`)
 
-**The system handles this for you.** Element anchors are identity-based, not path-based: at publish time, the Worker stamps every commentable artifact (`img, svg, canvas, video, pre, figure, iframe`) with a content-hashed `data-tdoc-aid` attribute. The **same artifact in any future version gets the same aid**, regardless of how the HTML around it is restructured. Comments anchor by aid; resolution is identity-first. If an aid disappears from the new version, the Worker marks the comment `kind: "lost"` so it renders unanchored — it will **never silently re-attach to a different artifact**.
+**The system handles this for you.** Element anchors are identity-based, not path-based: at publish time, the Worker stamps every commentable artifact with a content-hashed `data-tdoc-aid` attribute. The set of commentable artifacts:
+
+- **Media leaves:** `img, svg, canvas, video, pre, figure, iframe[src]`
+- **Semantic blocks:** `section, aside, blockquote, table, details` (`article` is intentionally excluded — it's a content-root pattern; using it would make the whole doc one artifact)
+- **Author opt-in:** any element tagged `data-tdoc-artifact` or with class containing `tdoc-artifact`
+
+The **same artifact in any future version gets the same aid**, regardless of how the HTML around it is restructured. Comments anchor by aid; resolution is identity-first. If an aid disappears from the new version, the Worker marks the comment `kind: "lost"` so it renders unanchored — it will **never silently re-attach to a different artifact**.
+
+### Make an author-composed block commentable as a unit
+
+If your doc has a "card" or composite widget built from `<div>`s (a transcript panel, a comparison card, a custom interactive widget), it won't be commentable as a unit by default — the overlay sees its inner text, not the card. Two ways to fix:
+
+1. **Use a semantic tag**: change `<div class="my-card">` to `<section class="my-card">` (or `<aside>`, `<details>` if appropriate). Automatic — no other change needed.
+2. **Opt in explicitly** with `data-tdoc-artifact`:
+   ```html
+   <div class="my-card" data-tdoc-artifact>…composite content…</div>
+   ```
+   Or use a class containing `tdoc-artifact`. Works on any tag.
+
+Both paths give the block a stable aid and the full hover-to-comment affordance, identical to the media-leaf experience.
 
 You generally don't need to do anything special when regenerating — the aid stamping is automatic on `/tdoc publish`. But it's still polite to:
 
@@ -547,7 +566,7 @@ Otherwise pick the block matching the outcome:
 **On success**:
 
 ```bash
-"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+"/Users/keyitan/.claude/skills/tdoc/telemetry/bin/telemetry-log" \
   --skill tdoc \
   --outcome success \
   --duration "$DURATION"
@@ -556,7 +575,7 @@ Otherwise pick the block matching the outcome:
 **On error**:
 
 ```bash
-"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+"/Users/keyitan/.claude/skills/tdoc/telemetry/bin/telemetry-log" \
   --skill tdoc \
   --outcome error \
   --duration "$DURATION" \
@@ -567,7 +586,7 @@ Otherwise pick the block matching the outcome:
 **On abandoned** (user asked to stop):
 
 ```bash
-"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+"/Users/keyitan/.claude/skills/tdoc/telemetry/bin/telemetry-log" \
   --skill tdoc \
   --outcome abandoned \
   --duration "$DURATION" \

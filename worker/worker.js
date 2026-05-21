@@ -92,7 +92,17 @@ function safeJsonForScript(obj) {
 // impossible because the aid is the artifact, not a path through the DOM.
 //
 // The set of commentable artifacts matches the overlay's COMMENTABLE.
-const STAMPABLE_TAGS = ['img','svg','canvas','video','pre','figure','iframe'];
+// Includes leaf media + semantic blocks the author signaled are a unit.
+// Plus: any element with `data-tdoc-artifact` or a class containing
+// `tdoc-artifact` is stamped regardless of tag (the explicit opt-in path).
+// NOTE: `article` is intentionally omitted — it's the doc CONTENT ROOT
+// in some authoring patterns (per ARTICLE_ROOT_SEL in overlay.js); making
+// it commentable would make the whole doc one big artifact. Use `section`
+// or `data-tdoc-artifact` to mark sub-blocks instead.
+const STAMPABLE_TAGS = [
+  'img','svg','canvas','video','pre','figure','iframe',
+  'section','aside','blockquote','table','details',
+];
 // 53-bit string hash (public-domain cyrb53), identical to the one in the
 // overlay so identities computed on either side agree.
 function cyrb53(str, seed = 0) {
@@ -152,27 +162,38 @@ function stampAids(rawHtml) {
   // For non-void tags, find its matching close (same-tag depth count).
   // Collect [openStart, openEnd, closeEnd, tag, attrs, innerHtml] per element.
   const elements = [];
+  const seenOpens = new Set();   // dedupe across passes (tag pass + opt-in pass)
+  function harvest(openStart, openEnd, tagLower, attrs) {
+    if (seenOpens.has(openStart)) return;
+    const isVoid = /^(img|iframe)$/i.test(tagLower) || /\/\s*$/.test(attrs);
+    let closeEnd = openEnd, innerHtml = '';
+    if (!isVoid) {
+      const closeRe = new RegExp(`</${tagLower}\\s*>|<${tagLower}\\b[^>]*>`, 'gi');
+      closeRe.lastIndex = openEnd;
+      let depth = 1, c;
+      while ((c = closeRe.exec(rawHtml))) {
+        if (c[0][1] === '/') { depth--; if (depth === 0) { closeEnd = c.index + c[0].length; break; } }
+        else depth++;
+      }
+      innerHtml = rawHtml.slice(openEnd, closeEnd - (`</${tagLower}>`.length));
+    }
+    seenOpens.add(openStart);
+    elements.push({ openStart, openEnd, closeEnd, tag: tagLower, attrs, innerHtml, isVoid });
+  }
+  // Pass 1: every known stampable tag.
   for (const tag of STAMPABLE_TAGS) {
     const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi');
     let m;
-    while ((m = openRe.exec(rawHtml))) {
-      const attrs = m[1] || '';
-      const openStart = m.index;
-      const openEnd = m.index + m[0].length;
-      const isVoid = /^(img|iframe)$/i.test(tag) || /\/\s*$/.test(attrs);
-      let closeEnd = openEnd, innerHtml = '';
-      if (!isVoid) {
-        const closeRe = new RegExp(`</${tag}\\s*>|<${tag}\\b[^>]*>`, 'gi');
-        closeRe.lastIndex = openEnd;
-        let depth = 1, c;
-        while ((c = closeRe.exec(rawHtml))) {
-          if (c[0][1] === '/') { depth--; if (depth === 0) { closeEnd = c.index + c[0].length; break; } }
-          else depth++;
-        }
-        innerHtml = rawHtml.slice(openEnd, closeEnd - (`</${tag}>`.length));
-      }
-      elements.push({ openStart, openEnd, closeEnd, tag, attrs, innerHtml, isVoid });
-    }
+    while ((m = openRe.exec(rawHtml))) harvest(m.index, m.index + m[0].length, tag, m[1] || '');
+  }
+  // Pass 2: opt-in markers (any tag with data-tdoc-artifact or class
+  // containing `tdoc-artifact`). Authors mark composed cards/widgets this
+  // way so they're commentable as a unit.
+  const optInRe = /<([a-z][\w-]*)\b([^>]*\b(?:data-tdoc-artifact\b|class\s*=\s*"[^"]*\btdoc-artifact\b[^"]*")[^>]*)>/gi;
+  let om;
+  while ((om = optInRe.exec(rawHtml))) {
+    const tagLower = om[1].toLowerCase();
+    harvest(om.index, om.index + om[0].length, tagLower, om[2] || '');
   }
   // Compute aid per element (uses cleaned attrs + inner content with any
   // existing data-tdoc-aid stripped, so re-stamping is idempotent).

@@ -1951,7 +1951,20 @@
   }
 
   // ========== Drag-to-comment on artifacts ==========
-  const COMMENTABLE = 'img, svg, canvas, video, pre, figure, iframe[src]';
+  // Commentable artifacts: leaf media + semantic blocks the author signaled
+  // are "a unit" (section/article/aside/blockquote/table/details — note
+  // `figure` and `pre` already included as media) + any element the author
+  // explicitly opted in via `data-tdoc-artifact` or a class containing
+  // `tdoc-artifact`. Author-composed cards (a transcript panel built from
+  // <div>s, a custom widget) become commentable as a unit when tagged —
+  // instead of being invisible to the artifact system.
+  // NB: `article` is excluded — it's a doc content-root pattern; making it
+  // commentable would let the whole doc become one big artifact. Use
+  // `section` or `data-tdoc-artifact` to mark sub-blocks instead.
+  const COMMENTABLE =
+    'img, svg, canvas, video, pre, figure, iframe[src], ' +
+    'section, aside, blockquote, table, details, ' +
+    '[data-tdoc-artifact], [class*="tdoc-artifact"]';
   // The doc content root (per SKILL.md every doc wraps content in one of
   // these). resolveArtifact must never climb into/past it.
   const ARTICLE_ROOT_SEL = 'main, article, .wrap, .content, .container';
