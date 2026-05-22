@@ -109,19 +109,25 @@ what breaks, and what to fix next — without guessing.
 
 ### What's collected (the full list)
 
-| Field             | Example                            |
-|-------------------|------------------------------------|
-| `ts`              | `2026-05-20T16:32:11Z`             |
-| `skill`           | `tdoc`                             |
-| `outcome`         | `success` / `error` / `abandoned`  |
-| `duration_s`      | `87`                               |
-| `error_detail`    | one-line error tag, ≤160 chars     |
-| `step`            | which step failed (if any)         |
-| `session_id`      | Claude Code session ID             |
-| `installation_id` | random UUID per machine            |
+| Field             | Example                              |
+|-------------------|--------------------------------------|
+| `ts`              | `2026-05-22T16:32:11Z`               |
+| `skill`           | `tdoc`                               |
+| `skill_version`   | `0.1.66`                             |
+| `event_type`      | `skill_run` / `upgrade_prompted`     |
+| `outcome`         | `success` / `error` / `abandoned`    |
+| `duration_s`      | `87`                                 |
+| `step`            | which tdoc command — `new` / `edit` / `publish` / … |
+| `error_class`     | short error tag, e.g. `publish_timeout` |
+| `error_message`   | longer error context, ≤400 chars     |
+| `session_id`      | Claude Code session ID               |
+| `installation_id` | random UUID per machine              |
+| `os` / `arch`     | `darwin` / `arm64`                   |
+| `sessions`        | count of concurrent active sessions  |
 
-The full schema and edge-function code live in `telemetry/` — read the
-code if you want to verify.
+It does **not** record your tdoc content, your prompts, file paths,
+or which git repo you were in. The full schema and edge-function code
+live in `telemetry/` — read the code if you want to verify.
 
 ### Three opt-out paths
 
