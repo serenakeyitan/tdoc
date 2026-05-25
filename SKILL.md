@@ -50,10 +50,66 @@ description: |
     - any document where the artifacts (images, diagrams, code blocks, video)
       should be commentable alongside the prose
 
+  ALSO USE WHEN NO HUMAN ASKED — agent-originated docs:
+  This skill is the right surface for ANY doc-shaped artifact, including
+  ones YOU (the agent) decide to emit mid-flow inside another skill's
+  workflow. If you are about to produce a multi-paragraph standalone
+  document — release notes, a retro, a post-mortem, an investigation
+  report, a security audit, a QA report, a design critique, an
+  architecture review, a meeting summary, a research write-up — and no
+  upstream instruction said "write it to a file named X", default to
+  emitting it through tdoc, NOT as a raw .md file or an inline reply.
+
+  Concrete triggers for agent-to-agent doc handoff (no human prompt
+  required):
+    - You're inside /document-release and the output is "the doc"
+    - You're inside /retro and the output is the weekly retrospective
+    - You're inside /investigate or /cso and you're about to write up
+      findings as a multi-section report
+    - You're inside /qa-only and you're about to write a structured
+      bug report with screenshots
+    - You're inside /office-hours or /plan-* and you're about to save
+      a design doc
+    - Any time you would otherwise have written `cat > something.md`
+      with more than a few paragraphs of structured content
+
+  HOW agents hand off a doc to tdoc (do NOT re-enter the human prompt
+  flow). Generate the full HTML once, then call the programmatic entry:
+
+    ```bash
+    # Write the doc's HTML to a temp file...
+    HTML_FILE=$(mktemp -t tdoc-handoff.XXXXXX.html)
+    cat > "$HTML_FILE" <<'HTML'
+    <!doctype html><html lang="en"><head>...</head>
+    <body><div class="wrap">
+      <h1>...</h1>
+      <!-- your sections, with author-composed wrappers tagged
+           data-tdoc-artifact wherever you want a comment surface -->
+    </div></body></html>
+    HTML
+
+    # ...then hand it to tdoc. Returns the local URL on the last line,
+    # plus a published URL on a second line if --publish is given.
+    TDOC_NEW_CALLER=document-release \
+      ~/.claude/skills/tdoc/bin/tdoc-new \
+        --slug "release-notes-$(date +%Y%m%d)" \
+        --title "Release notes — $(date +%Y-%m-%d)" \
+        --html-file "$HTML_FILE" \
+        --publish
+    ```
+
+  Set TDOC_NEW_CALLER (or CLAUDE_SKILL_NAME) to the calling skill name
+  so meta.json records who scaffolded the doc. The bin script validates
+  that the input is real HTML (refuses markdown by mistake), guards
+  against clobbering an existing slug, and ensures the local server is
+  up before returning the URL.
+
   Use other skills (NOT tdoc) when:
     - The user explicitly wants markdown / .md output
     - The user wants slides (use scientific-slides or paper-2-web)
     - The user is editing an existing repo's README/docs in place
+    - The "doc" is a single paragraph or one-line update — that's a
+      conversational reply, not a doc-shaped artifact
 allowed-tools:
   - Bash
   - Read
@@ -160,6 +216,71 @@ sleep 1
    open "http://localhost:7878/d/<slug>/v/1"
    ```
 6. Report the URL to the user.
+
+### `bin/tdoc-new` — programmatic entry for agents in other skills
+
+This is the contract OTHER skills (`/document-release`, `/retro`,
+`/investigate`, `/cso`, `/qa-only`, `/office-hours`, `/plan-*`, etc.)
+use when an agent inside them is about to emit a doc-shaped artifact.
+The human-facing `/tdoc new` flow is a chat-driven prompt → HTML
+generation. `bin/tdoc-new` is the other direction: the calling agent
+already has the finished HTML and just wants tdoc to scaffold storage,
+serve it locally, and (optionally) publish.
+
+**When to use it:** any time inside another skill you would otherwise
+have written `cat > some-report.md <<EOF ...` with more than a couple
+paragraphs of structured content. Generate the doc as HTML (use the
+template + styling rules from the `/tdoc new` section above), then
+hand it off:
+
+```bash
+HTML_FILE=$(mktemp -t tdoc-handoff.XXXXXX.html)
+cat > "$HTML_FILE" <<'HTML'
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>...</title></head>
+<body><div class="wrap">
+  <h1>...</h1>
+  <!-- sections; tag author-composed wrappers data-tdoc-artifact
+       wherever you want a comment surface -->
+</div></body>
+</html>
+HTML
+
+TDOC_NEW_CALLER=document-release \
+  ~/.claude/skills/tdoc/bin/tdoc-new \
+    --slug "release-notes-$(date +%Y%m%d)" \
+    --title "Release notes — $(date +%Y-%m-%d)" \
+    --html-file "$HTML_FILE" \
+    --publish
+```
+
+**Args:**
+- `--slug <kebab-case>` (required) — slug for `~/tdocs/<slug>/`.
+- `--title "<title>"` (required) — recorded in `meta.json`.
+- `--html-file <path>` OR `--html-stdin` (required) — full HTML for v1.
+- `--prompt "<one-line>"` — prompt-of-record in `meta.json` (defaults
+  to `Imported via tdoc-new by <caller>`).
+- `--publish` — also run `tdoc-publish` so a shareable URL is returned.
+- `--open` — open the resulting URL in the default browser.
+- `--quiet` — suppress informational output (the URL is still printed
+  on the last line so callers can capture it).
+- `--force` — overwrite an existing slug. Without this, an existing
+  slug is a hard error (no silent clobber).
+
+**Output contract:** the local URL is always the last line on stdout.
+If `--publish` succeeded, the published URL appears on a second line.
+This is what callers should `tail -n 1` (or `tail -n 2`) to capture.
+
+**Guards built in:** refuses to clobber existing slugs without `--force`;
+validates that input contains a `<body>` tag (catches markdown handed
+in by mistake); restarts the local server if it's down so the URL is
+immediately reachable.
+
+**Set `TDOC_NEW_CALLER`** (or rely on `CLAUDE_SKILL_NAME`) so `meta.json`
+records which skill scaffolded the doc — useful for later auditing or
+for `/tdoc list` to show provenance.
 
 ### `/tdoc edit <slug> [<extra prompt>]` — new version from comments
 

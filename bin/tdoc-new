@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# tdoc-new — programmatic entry for creating a tdoc from another skill/agent.
+#
+# This is the contract OTHER skills (gstack /document-release, /retro,
+# /investigate, /cso audit reports, etc.) should call when they're about
+# to emit a doc-shaped artifact. Hand tdoc the HTML and a slug; tdoc
+# scaffolds storage, serves it locally, and optionally publishes.
+#
+# Why this exists: the human-facing flow is "/tdoc new <prompt>", where
+# Claude writes the HTML inline. Agents inside other skills already have
+# the content (a markdown report, an audit, a retro). They shouldn't
+# re-enter the prompt-flow; they should hand off the finished artifact.
+#
+# Usage:
+#   tdoc-new --slug <slug> --title "<title>" --html-file <path> [options]
+#   tdoc-new --slug <slug> --title "<title>" --html-stdin             [options]
+#
+# Required:
+#   --slug <kebab-case>        slug for the new doc (creates ~/tdocs/<slug>/)
+#   --title "<title>"          human-readable title (stored in meta.json)
+#   --html-file <path>         path to the full HTML for v1
+#     OR
+#   --html-stdin               read HTML for v1 from stdin
+#
+# Optional:
+#   --prompt "<one-line>"      prompt-of-record stored in meta.json (defaults
+#                              to "Imported by <caller>" if caller env exists,
+#                              else "Imported via tdoc-new").
+#   --publish                  also run tdoc-publish after scaffolding so a
+#                              shareable URL is produced.
+#   --open                     open the local URL in the default browser.
+#   --quiet                    suppress informational output (still prints
+#                              the resulting URL on the last line).
+#   --force                    overwrite an existing slug directory. Without
+#                              this, an existing slug is a hard error.
+#
+# Behavior:
+#   - Refuses to clobber an existing slug unless --force.
+#   - Validates the HTML has a <body> tag (catches markdown-passed-as-html).
+#   - Restarts the local server if it's down, so the URL is immediately live.
+#   - Prints the local URL last (so callers can capture it).
+#   - With --publish: also prints the published URL on a second line.
+
+set -euo pipefail
+
+# ─────────────────────────────── arg parsing ──────────────────────────────
+SLUG=""
+TITLE=""
+HTML_FILE=""
+HTML_STDIN=0
+PROMPT=""
+PUBLISH=0
+OPEN_URL=0
+QUIET=0
+FORCE=0
+
+err() { echo "tdoc-new: $*" >&2; }
+info() { [ "$QUIET" = "1" ] || echo "[tdoc-new] $*"; }
+die() { err "$*"; exit 1; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --slug)       SLUG="${2:-}"; shift 2 ;;
+    --title)      TITLE="${2:-}"; shift 2 ;;
+    --html-file)  HTML_FILE="${2:-}"; shift 2 ;;
+    --html-stdin) HTML_STDIN=1; shift ;;
+    --prompt)     PROMPT="${2:-}"; shift 2 ;;
+    --publish)    PUBLISH=1; shift ;;
+    --open)       OPEN_URL=1; shift ;;
+    --quiet)      QUIET=1; shift ;;
+    --force)      FORCE=1; shift ;;
+    -h|--help)
+      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      die "unknown arg: $1 (run with --help)"
+      ;;
+  esac
+done
+
+[ -n "$SLUG" ]  || die "--slug required"
+[ -n "$TITLE" ] || die "--title required"
+# slug must be kebab-case-ish so directory and URL are safe.
+[[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]*[a-z0-9]$ || "$SLUG" =~ ^[a-z0-9]$ ]] \
+  || die "--slug must be lowercase kebab-case (a-z, 0-9, -); got '$SLUG'"
+
+# Exactly one of --html-file / --html-stdin
+if [ -n "$HTML_FILE" ] && [ "$HTML_STDIN" = "1" ]; then
+  die "use --html-file OR --html-stdin, not both"
+fi
+if [ -z "$HTML_FILE" ] && [ "$HTML_STDIN" = "0" ]; then
+  die "need either --html-file <path> or --html-stdin"
+fi
+if [ -n "$HTML_FILE" ] && [ ! -f "$HTML_FILE" ]; then
+  die "--html-file not found: $HTML_FILE"
+fi
+
+# ─────────────────────────────── paths + env ──────────────────────────────
+TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"
+SKILL_DIR="$HOME/.claude/skills/tdoc"
+DOC_DIR="$TDOC_DIR/$SLUG"
+V1_DIR="$DOC_DIR/v1"
+
+if [ -d "$DOC_DIR" ]; then
+  if [ "$FORCE" = "1" ]; then
+    info "overwriting existing slug '$SLUG' (--force)"
+    rm -rf "$DOC_DIR"
+  else
+    die "slug '$SLUG' already exists at $DOC_DIR; use --force to overwrite, or a different slug"
+  fi
+fi
+
+mkdir -p "$V1_DIR"
+HTML_PATH="$V1_DIR/index.html"
+
+# ─────────────────────────────── write HTML ───────────────────────────────
+if [ "$HTML_STDIN" = "1" ]; then
+  cat > "$HTML_PATH"
+else
+  cp "$HTML_FILE" "$HTML_PATH"
+fi
+
+if [ ! -s "$HTML_PATH" ]; then
+  rm -rf "$DOC_DIR"
+  die "html content was empty"
+fi
+# Cheap sanity check: catches "agent handed us markdown instead of HTML"
+if ! grep -qi '<body' "$HTML_PATH"; then
+  rm -rf "$DOC_DIR"
+  die "html does not contain a <body> tag — did you pass markdown by mistake?"
+fi
+
+# ─────────────────────────────── meta.json ────────────────────────────────
+CREATED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+CALLER="${TDOC_NEW_CALLER:-${CLAUDE_SKILL_NAME:-unknown}}"
+DEFAULT_PROMPT="Imported via tdoc-new by ${CALLER}"
+PROMPT_RECORDED="${PROMPT:-$DEFAULT_PROMPT}"
+
+# JSON-escape title + prompt the cheap, correct way using python (always
+# present on macOS / linux). Avoids hand-rolled sed escaping.
+META_JSON=$(python3 -c '
+import json, sys
+title, slug, created, prompt = sys.argv[1:5]
+print(json.dumps({
+  "title": title,
+  "slug":  slug,
+  "created": created,
+  "versions": [{ "n": 1, "created": created, "prompt": prompt }],
+}, indent=2))
+' "$TITLE" "$SLUG" "$CREATED" "$PROMPT_RECORDED")
+
+printf '%s\n' "$META_JSON" > "$DOC_DIR/meta.json"
+printf '[]\n' > "$DOC_DIR/comments.json"
+info "scaffolded $DOC_DIR (v1)"
+
+# ───────────────────────── ensure local server up ────────────────────────
+if ! curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1; then
+  info "local server down; starting..."
+  nohup node "$SKILL_DIR/server/server.js" > "$TDOC_DIR/.server.log" 2>&1 &
+  # Wait briefly so the URL we print is actually reachable.
+  for _ in 1 2 3 4 5; do
+    sleep 0.3
+    curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1 && break
+  done
+fi
+
+LOCAL_URL="http://localhost:7878/d/$SLUG/v/1"
+
+# ─────────────────────────────── publish? ─────────────────────────────────
+PUBLISHED_URL=""
+if [ "$PUBLISH" = "1" ]; then
+  info "publishing to Cloudflare Worker..."
+  if PUB_OUT=$("$SKILL_DIR/bin/tdoc-publish" "$SLUG" 2>&1); then
+    PUBLISHED_URL=$(printf '%s\n' "$PUB_OUT" | awk '/^Published:/ { print $2 }')
+    [ -n "$PUBLISHED_URL" ] && info "published: $PUBLISHED_URL"
+  else
+    err "publish failed; local doc is still available."
+    err "$PUB_OUT"
+  fi
+fi
+
+# ─────────────────────────────── open? ────────────────────────────────────
+if [ "$OPEN_URL" = "1" ]; then
+  OPEN_TARGET="${PUBLISHED_URL:-$LOCAL_URL}"
+  if command -v open >/dev/null 2>&1; then open "$OPEN_TARGET" >/dev/null 2>&1 || true; fi
+fi
+
+# Final output contract: last line(s) are URLs callers can capture.
+# Local URL is always printed; published URL appears on a second line iff
+# --publish succeeded.
+echo "$LOCAL_URL"
+[ -n "$PUBLISHED_URL" ] && echo "$PUBLISHED_URL"
