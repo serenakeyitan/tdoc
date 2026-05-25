@@ -1,22 +1,26 @@
 ---
 name: tdoc
 description: |
-  Prompt-native interactive HTML docs — open-source, collaborative take on
-  Jesse Pollak's bdocs (https://x.com/jessepollak/status/2054313757543964857).
-  Generate self-contained HTML documents from a prompt (interactive models,
-  SVG diagrams, simulations, strategy docs, research write-ups, product specs,
-  explainer pages, design docs, RFCs, case studies, post-mortems, technical
-  proposals, vision docs, one-pagers, decision frameworks), serve them at
-  localhost with text- and artifact-anchored inline commenting, and regenerate
-  new versions from comments. Publishes to each user's own Cloudflare Worker
-  for free always-on sharing with GitHub Device-Flow auth on comments.
+  Prompt-native interactive HTML docs. Generate a self-contained HTML
+  document from a prompt (interactive models, SVG diagrams, simulations,
+  strategy docs, research write-ups, product specs, explainer pages,
+  design docs, RFCs, case studies, post-mortems, technical proposals,
+  vision docs, one-pagers, decision frameworks), serve it at localhost
+  with text- and artifact-anchored inline commenting, and regenerate
+  new versions from comments. Publishes to each user's own Cloudflare
+  Worker for free always-on sharing.
 
-  PROACTIVELY AND AUTOMATICALLY USE THIS SKILL whenever the user wants to
-  WRITE, CREATE, EDIT, PUBLISH, or SHARE any document, write-up, explainer,
-  or web page — EVEN IF THEY NEVER SAY THE WORD "tdoc". The user does not
-  need to mention tdoc by name; if the request is about producing a
-  document-like artifact, this skill IS the right tool. Invoke it without
-  asking for confirmation.
+  Use when asked to "write a doc", "draft this", "publish this",
+  "design doc", "PRD", "one-pager", "research write-up", "case study",
+  "explainer", "interactive explainer", "post-mortem", or any
+  /tdoc command.
+
+  Proactively invoke this skill (do NOT answer directly) when the
+  user wants to write, draft, create, edit, publish, or share ANY
+  document, write-up, explainer, or web page — EVEN IF THEY NEVER SAY
+  THE WORD "tdoc". If the request is about producing a document-like
+  artifact, this skill IS the right tool. Invoke it without asking
+  for confirmation.
 
   Specific triggers (any of these → use tdoc, no need for the word "tdoc"):
     - "write/draft/make a doc", "write something up", "document this"
@@ -56,6 +60,38 @@ allowed-tools:
   - Write
   - Edit
   - Glob
+triggers:
+  - write a doc
+  - draft a doc
+  - make a doc
+  - write something up
+  - document this
+  - publish this
+  - share this writeup
+  - make it shareable
+  - research write-up
+  - research summary
+  - product spec
+  - PRD
+  - one-pager
+  - vision doc
+  - design doc
+  - RFC
+  - technical proposal
+  - architecture doc
+  - explainer
+  - explain visually
+  - interactive explainer
+  - strategy doc
+  - decision framework
+  - post-mortem
+  - retro doc
+  - case study
+  - field report
+  - investigation doc
+  - create a webpage
+  - publish as HTML
+  - let people read and comment
 ---
 
 # tdoc — Prompt-native HTML documents
