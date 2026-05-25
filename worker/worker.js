@@ -238,70 +238,35 @@ function stampAids(rawHtml) {
 //     present) must match too. Single high-confidence candidate → adopt;
 //     ambiguous or missing → mark `anchor.kind = "lost"` so the comment
 //     renders unanchored INSTEAD OF SILENTLY POINTING AT THE WRONG ARTIFACT.
-function reconcileAnchors(comments, aidsInVersion) {
+// Reconcile anchors at upload time of version V. For each comment that is
+// ALIVE at V, look at its snapshot's anchor; if the aid no longer resolves
+// in this version's stamped artifacts, attempt to find the right aid by
+// fingerprint + heading and APPEND an `anchor_changed` event stamped at V.
+// We never mutate older events — older versions keep their own anchors.
+//
+// Result: per-version anchor mapping is naturally encoded in the event log.
+// A comment created on v5 with aid X, then rebound on v7 to aid Y, will
+// resolve to X on v5/v6 (via its `created` event) and to Y on v7+ (via the
+// new `anchor_changed` event). This replaces aid_history.
+function reconcileAnchors(comments, aidsInVersion, V) {
   if (!Array.isArray(comments)) return comments;
+  ensureMigrated(comments);
   const byAid = new Map(aidsInVersion.map(a => [a.aid, a]));
+  const version = Number(V) || 1;
+  const now = new Date().toISOString();
+
   for (const c of comments) {
-    if (!c || !c.anchor) continue;
-    // `lost` is a per-version verdict, not permanent. Re-evaluate on each
-    // publish so an artifact restored or re-stamped in a later version
-    // can rebind a previously-lost comment.
-    if (c.anchor.kind === 'lost') { c.anchor.kind = 'element'; delete c.anchor.reason; }
-    if (c.anchor.kind !== 'element') continue;
-    // NB: previously we skipped `status:"applied"` here on the theory that
-    // resolved comments don't re-anchor. But applied comments are STILL
-    // rendered on the page (with their ✅ verdict) — and they still need
-    // to point at the right artifact. A legacy applied comment with an
-    // un-bound positional selector will display on the WRONG artifact
-    // forever otherwise. So we reconcile applied comments too: bind their
-    // aid if we can identify the artifact unambiguously; mark lost if not.
-    const a = c.anchor;
-    // Helper: record a (new) aid as the current binding while preserving
-    // every prior aid in `aid_history`. This is the core of cross-version
-    // anchor stability: when an artifact's content hash changes between
-    // versions, the comment gets a fresh aid in the new version but the
-    // OLD aid is still valid in OLDER versions. We never throw away old
-    // bindings — the overlay resolves any aid in history, newest first.
-    const bind = (newAid) => {
-      if (a.aid && a.aid !== newAid) {
-        if (!Array.isArray(a.aid_history)) a.aid_history = [];
-        a.aid_history = [a.aid, ...a.aid_history.filter(x => x && x !== a.aid && x !== newAid)];
-      }
-      a.aid = newAid;
-      // Never let the current aid appear in history.
-      if (Array.isArray(a.aid_history)) {
-        a.aid_history = a.aid_history.filter(x => x && x !== newAid);
-        if (!a.aid_history.length) delete a.aid_history;
-      }
-    };
-    // 1. Already aid-anchored → trust it if the aid is still in the doc.
-    //    If the aid is STALE (from a prior version), DON'T delete it —
-    //    push it into aid_history and try to find the current-version aid
-    //    via heading/tag re-resolution. Old viewers of older versions
-    //    still need the original aid to render.
+    const snap = snapshotAt(c, version);
+    if (!snap || snap.deleted) continue;
+    const a = snap.anchor;
+    if (!a || a.kind !== 'element') continue;
+
     const knownAid = a.aid
       || (a.selector && /\[data-tdoc-aid="([\w]+)"\]/.exec(a.selector || '')?.[1]);
-    if (knownAid) {
-      if (byAid.has(knownAid)) continue;       // valid → done
-      // Stale aid: preserve it in history, retry to find current aid.
-      if (!Array.isArray(a.aid_history)) a.aid_history = [];
-      if (!a.aid_history.includes(knownAid)) a.aid_history.unshift(knownAid);
-      delete a.aid;
-      a.kind = 'element';
-      delete a.reason;
-    }
-    // 1b. Maybe an aid in history matches this version's DOM — if so,
-    //     promote it back to the current binding and we're done.
-    if (Array.isArray(a.aid_history) && a.aid_history.length) {
-      const hit = a.aid_history.find(x => byAid.has(x));
-      if (hit) {
-        a.aid_history = a.aid_history.filter(x => x !== hit);
-        a.aid = hit;
-        continue;
-      }
-    }
-    // 2. Has a fingerprint — find the aid whose inventory matches the
-    //    artifact tag + heading hint best.
+    // Already valid in this version → nothing to do.
+    if (knownAid && byAid.has(knownAid)) continue;
+
+    // Try fingerprint + heading match against this version's artifacts.
     const fp = a.fingerprint;
     const wantTag = (fp && fp.tag) || (a.label || '').toLowerCase();
     const wantHead = a.fallback && a.fallback.nearestHeading && a.fallback.nearestHeading.text;
@@ -309,19 +274,44 @@ function reconcileAnchors(comments, aidsInVersion) {
       (!wantTag || x.tag === wantTag) &&
       (!wantHead || (x.heading || '').toLowerCase() === wantHead.toLowerCase())
     );
-    if (candidates.length === 1) {
-      bind(candidates[0].aid);
-      continue;
-    }
-    if (candidates.length === 0) {
-      // Try tag-only — if still ambiguous, give up cleanly.
+    let newAid = null;
+    if (candidates.length === 1) newAid = candidates[0].aid;
+    else if (candidates.length === 0) {
       const tagOnly = aidsInVersion.filter(x => !wantTag || x.tag === wantTag);
-      if (tagOnly.length === 1) { bind(tagOnly[0].aid); continue; }
-      a.kind = 'lost'; a.reason = 'no candidate artifact in new version';
-      continue;
+      if (tagOnly.length === 1) newAid = tagOnly[0].aid;
     }
-    // Ambiguous → unanchor rather than guess. The user can re-anchor.
-    a.kind = 'lost'; a.reason = 'multiple candidate artifacts; cannot disambiguate';
+
+    if (newAid) {
+      // Append the rebind as an event at THIS version. Older folds are
+      // unchanged.
+      appendEvent(c, {
+        kind: 'anchor_changed', at_version: version, at: now, by: 'reconcile',
+        reset_status: false,
+        anchor: {
+          kind: 'element',
+          aid: newAid,
+          selector: `[data-tdoc-aid="${newAid}"]`,
+          label: a.label || (fp && fp.tag) || 'element',
+          ...(fp ? { fingerprint: fp } : {}),
+          ...(a.fallback ? { fallback: a.fallback } : {}),
+        },
+      });
+    } else {
+      // No confident match → mark anchor lost in this version. Older
+      // versions keep their valid anchors (because they fold to earlier
+      // anchor_changed / created events that still resolve).
+      appendEvent(c, {
+        kind: 'anchor_changed', at_version: version, at: now, by: 'reconcile',
+        reset_status: false,
+        anchor: {
+          kind: 'lost',
+          reason: candidates.length > 1 ? 'ambiguous' : 'no_candidate',
+          ...(a.label ? { label: a.label } : {}),
+          ...(fp ? { fingerprint: fp } : {}),
+          ...(a.fallback ? { fallback: a.fallback } : {}),
+        },
+      });
+    }
   }
   return comments;
 }
@@ -416,27 +406,265 @@ ${rows.length === 0 ? '<p class="empty">No published docs yet.</p>' :
 </body></html>`;
 }
 
-// ---- GitHub helpers ----
-// Replace tdoc-agent's reaction on a target with the emoji for the new
-// status. See server.js setAgentReaction for the protocol. Kept inline
-// here because the worker bundles separately and can't import from the
-// local server.
+// ─────────────────────────────────────────────────────────────────────────
+// EVENT-LOG COMMENT MODEL (v0.2)
+//
+// Each comment is stored as { id, author, created_in, created, events: [...] }.
+// Events: created, text_edited, anchor_changed, marked_applied, deleted,
+//   reaction_added, reaction_removed, reply_added, reply_text_edited,
+//   reply_deleted, reply_reaction_added, reply_reaction_removed.
+// Every event carries `at_version` and `at` (ISO timestamp).
+//
+// THE FUNDAMENTAL RULE: every version is a snapshot. Reading a comment "as
+// of version N" folds events with at_version <= N. Mutations NEVER overwrite
+// past state — they append a new event. Going back to an older version
+// shows the comment exactly as it existed then; going forward shows the
+// latest state.
+//
+// Agent emoji (✅🟡❓) is rendered at fold time from marked_applied events,
+// not stored as a reaction record. That way the agent verdict is per-version
+// just like any other status.
+
 const AGENT_STATUS_EMOJI = { applied: '✅', partial: '🟡', question: '❓' };
-function setAgentReaction(target, status) {
-  if (!target.reactions) target.reactions = {};
-  for (const emoji of Object.keys(target.reactions)) {
-    const users = target.reactions[emoji] || [];
-    const idx = users.indexOf('tdoc-agent');
-    if (idx >= 0) users.splice(idx, 1);
-    if (users.length === 0) delete target.reactions[emoji];
-    else target.reactions[emoji] = users;
-  }
-  const next = AGENT_STATUS_EMOJI[status];
-  if (!next) return;
-  const u = target.reactions[next] || [];
-  if (!u.includes('tdoc-agent')) u.push('tdoc-agent');
-  target.reactions[next] = u;
+
+function isFiniteVersion(v) {
+  return Number.isFinite(v) && v >= 0;
 }
+
+// Build a fresh `created` event from a legacy record. Used in lazy migration.
+function legacyToEvents(c) {
+  const events = [];
+  const at = c.created || new Date().toISOString();
+  const v = Number(c.version) || 1;
+  events.push({
+    kind: 'created', at_version: v, at,
+    anchor: c.anchor || null,
+    text: c.text || '',
+  });
+  if (c.status === 'applied') {
+    events.push({
+      kind: 'marked_applied', at_version: Number(c.applied_in) || v, at,
+      applied_in: Number(c.applied_in) || v,
+      by: 'tdoc-agent',
+      agent_status: 'applied',
+    });
+  }
+  // Reactions become add events stamped at the comment's create version.
+  if (c.reactions && typeof c.reactions === 'object') {
+    for (const emoji of Object.keys(c.reactions)) {
+      const users = c.reactions[emoji] || [];
+      for (const login of users) {
+        events.push({ kind: 'reaction_added', at_version: v, at, by: login, emoji });
+      }
+    }
+  }
+  // Replies become reply_added events. Each carries its own author + text,
+  // and reactions are folded into reply_reaction_added events.
+  if (Array.isArray(c.replies)) {
+    for (const r of c.replies) {
+      events.push({
+        kind: 'reply_added', at_version: Number(r.version) || v, at: r.created || at,
+        reply: {
+          id: r.id, author: r.author || null, text: r.text || '',
+          agent_status: r.agent_status || null,
+        },
+      });
+      if (r.reactions && typeof r.reactions === 'object') {
+        for (const emoji of Object.keys(r.reactions)) {
+          for (const login of (r.reactions[emoji] || [])) {
+            events.push({
+              kind: 'reply_reaction_added', at_version: Number(r.version) || v,
+              at: r.created || at, reply_id: r.id, by: login, emoji,
+            });
+          }
+        }
+      }
+    }
+  }
+  return events;
+}
+
+// If a record doesn't have `events[]`, build one in-place. Returns true if
+// the record was migrated (caller may want to persist).
+function ensureEventLog(c) {
+  if (c && Array.isArray(c.events)) return false;
+  if (!c || !c.id) return false;
+  const events = legacyToEvents(c);
+  c.events = events;
+  c.created_in = events[0]?.at_version || Number(c.version) || 1;
+  // Author + created are immutable identity, keep them at the top level.
+  c.author = c.author || (events[0]?.reply ? events[0].reply.author : null) || null;
+  c.created = c.created || events[0]?.at || new Date().toISOString();
+  return true;
+}
+
+// Fold a comment record into its snapshot AS OF version V.
+// Returns the flat shape today's overlay already understands:
+//   { id, version, author, created, anchor, text, status, applied_in,
+//     replies, reactions, deleted, created_in }
+// Returns null if the comment did not yet exist at V.
+function snapshotAt(c, V) {
+  ensureEventLog(c);
+  if (!Array.isArray(c.events) || c.events.length === 0) return null;
+  const at = isFiniteVersion(V) ? V : Infinity;
+  if (c.created_in != null && c.created_in > at) return null;
+  // Default snapshot scaffold.
+  const snap = {
+    id: c.id,
+    author: c.author,
+    created: c.created,
+    created_in: c.created_in,
+    version: c.created_in,
+    anchor: null,
+    text: '',
+    status: 'open',
+    applied_in: undefined,
+    replies: [],
+    reactions: {},
+    deleted: false,
+  };
+  // Reply folds keyed by reply id, in insertion order.
+  const replyOrder = [];
+  const replyById = new Map();
+  // Replay events in stored order (which is append-order, monotonic in time).
+  for (const e of c.events) {
+    if (!e || !isFiniteVersion(e.at_version) || e.at_version > at) continue;
+    switch (e.kind) {
+      case 'created':
+        snap.anchor = e.anchor || null;
+        snap.text = e.text || '';
+        break;
+      case 'text_edited':
+        snap.text = e.text || '';
+        break;
+      case 'anchor_changed':
+        snap.anchor = e.anchor || null;
+        // Re-anchor resets the agent verdict (matches prior PATCH behavior).
+        if (e.reset_status) { snap.status = 'open'; snap.applied_in = undefined; }
+        break;
+      case 'marked_applied':
+        snap.status = 'applied';
+        snap.applied_in = e.applied_in || e.at_version;
+        snap._agentVerdict = e.agent_status || 'applied';
+        break;
+      case 'marked_open':
+        snap.status = 'open';
+        snap.applied_in = undefined;
+        snap._agentVerdict = e.agent_status || null;
+        break;
+      case 'deleted':
+        snap.deleted = true;
+        break;
+      case 'reaction_added': {
+        if (!e.emoji || !e.by) break;
+        const u = snap.reactions[e.emoji] || [];
+        if (!u.includes(e.by)) u.push(e.by);
+        snap.reactions[e.emoji] = u;
+        break;
+      }
+      case 'reaction_removed': {
+        if (!e.emoji || !e.by) break;
+        const u = snap.reactions[e.emoji] || [];
+        const idx = u.indexOf(e.by);
+        if (idx >= 0) u.splice(idx, 1);
+        if (u.length) snap.reactions[e.emoji] = u; else delete snap.reactions[e.emoji];
+        break;
+      }
+      case 'reply_added': {
+        if (!e.reply || !e.reply.id) break;
+        const r = {
+          id: e.reply.id, parent_id: c.id,
+          author: e.reply.author || null,
+          text: e.reply.text || '',
+          agent_status: e.reply.agent_status || null,
+          created: e.at,
+          reactions: {},
+          deleted: false,
+        };
+        replyOrder.push(r.id);
+        replyById.set(r.id, r);
+        break;
+      }
+      case 'reply_text_edited': {
+        const r = replyById.get(e.reply_id);
+        if (r) r.text = e.text || '';
+        break;
+      }
+      case 'reply_deleted': {
+        const r = replyById.get(e.reply_id);
+        if (r) r.deleted = true;
+        break;
+      }
+      case 'reply_reaction_added': {
+        const r = replyById.get(e.reply_id);
+        if (!r || !e.emoji || !e.by) break;
+        const u = r.reactions[e.emoji] || [];
+        if (!u.includes(e.by)) u.push(e.by);
+        r.reactions[e.emoji] = u;
+        break;
+      }
+      case 'reply_reaction_removed': {
+        const r = replyById.get(e.reply_id);
+        if (!r || !e.emoji || !e.by) break;
+        const u = r.reactions[e.emoji] || [];
+        const idx = u.indexOf(e.by);
+        if (idx >= 0) u.splice(idx, 1);
+        if (u.length) r.reactions[e.emoji] = u; else delete r.reactions[e.emoji];
+        break;
+      }
+    }
+  }
+  // Apply the agent emoji synthetically so the UI behavior (✅/🟡/❓ on the
+  // parent card) matches today without storing it as a real reaction event.
+  if (snap._agentVerdict && AGENT_STATUS_EMOJI[snap._agentVerdict]) {
+    const emoji = AGENT_STATUS_EMOJI[snap._agentVerdict];
+    const u = snap.reactions[emoji] || [];
+    if (!u.includes('tdoc-agent')) u.push('tdoc-agent');
+    snap.reactions[emoji] = u;
+  }
+  delete snap._agentVerdict;
+  snap.replies = replyOrder.map(id => replyById.get(id)).filter(r => r && !r.deleted);
+  return snap;
+}
+
+// Fold the full list at version V, filter out alive comments only.
+// `V = Infinity` (or undefined) = latest snapshot, no version filter.
+function snapshotList(list, V) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const c of list) {
+    const s = snapshotAt(c, V);
+    if (s && !s.deleted) out.push(s);
+  }
+  return out;
+}
+
+// Helper used by all mutating endpoints: ensure the list is migrated to the
+// event-log shape before we touch it. Returns the (possibly mutated) list.
+function ensureMigrated(list) {
+  let dirty = false;
+  for (const c of list) {
+    if (ensureEventLog(c)) dirty = true;
+  }
+  return dirty;
+}
+
+// Append an event to a comment record (auto-creates events[] if missing).
+function appendEvent(c, event) {
+  if (!Array.isArray(c.events)) c.events = [];
+  c.events.push(event);
+}
+
+// Parse the version query param. Returns Infinity when missing/invalid so
+// caller gets the latest snapshot (matches pre-versioned behavior).
+function parseVersionParam(url) {
+  const v = url.searchParams.get('version');
+  if (v == null || v === '') return Infinity;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : Infinity;
+}
+
+// ---- GitHub helpers ----
 
 async function ghPost(path, formObj) {
   const body = new URLSearchParams(formObj).toString();
@@ -557,7 +785,11 @@ export default {
       let html = await obj.text();
 
       const commentsRaw = await env.META.get(`comments:${slug}`);
-      const comments = commentsRaw ? JSON.parse(commentsRaw) : [];
+      const rawList = commentsRaw ? JSON.parse(commentsRaw) : [];
+      ensureMigrated(rawList);
+      // Snapshot the comments AS OF this exported version, then keep the
+      // ones that are still actionable (not deleted, not resolved).
+      const comments = snapshotList(rawList, Number(vStr));
       const openComments = comments.filter(c => c.status !== 'resolved');
 
       // 1. Build the agent-readable banner.
@@ -728,7 +960,14 @@ export default {
       const slug = url.searchParams.get('slug');
       if (!slug) return json({ error: 'slug required' }, { status: 400 });
       const raw = await env.META.get(`comments:${slug}`);
-      return json(raw ? JSON.parse(raw) : []);
+      const list = raw ? JSON.parse(raw) : [];
+      // Lazy migrate any legacy records on first touch so future endpoints
+      // can assume events[] exists. Persist only if anything changed.
+      if (ensureMigrated(list)) {
+        await env.META.put(`comments:${slug}`, JSON.stringify(list));
+      }
+      const V = parseVersionParam(url);
+      return json(snapshotList(list, V));
     }
 
     if (p === '/api/comments' && method === 'POST') {
@@ -740,68 +979,59 @@ export default {
       if (!slug || !commentText) return json({ error: 'slug and text required' }, { status: 400 });
       const raw = await env.META.get(`comments:${slug}`);
       const list = raw ? JSON.parse(raw) : [];
+      ensureMigrated(list);
       const author = { login: s.login, avatar_url: s.avatar_url, name: s.name };
       const created = new Date().toISOString();
+      const V = Number(version) || 1;
 
       if (parent_id) {
-        // Reply: append to parent.replies[]
+        // Reply: append `reply_added` event on the parent.
         const parent = list.find(c => c.id === parent_id);
         if (!parent) return json({ error: 'parent_not_found' }, { status: 404 });
-        if (!Array.isArray(parent.replies)) parent.replies = [];
-        const reply = {
-          id: `r_${Date.now()}_${rand(4)}`,
-          parent_id,
-          text: commentText,
-          author,
-          created,
-          reactions: {},
-        };
-        parent.replies.push(reply);
+        const replyId = `r_${Date.now()}_${rand(4)}`;
+        appendEvent(parent, {
+          kind: 'reply_added', at_version: V, at: created,
+          reply: { id: replyId, author, text: commentText, agent_status: null },
+        });
         await env.META.put(`comments:${slug}`, JSON.stringify(list));
-        return json(reply);
+        return json({ id: replyId, parent_id, author, text: commentText, created, version: V });
       }
 
+      const id = `c_${Date.now()}_${rand(4)}`;
       const entry = {
-        id: `c_${Date.now()}_${rand(4)}`,
-        version: version || 1,
-        anchor: anchor || null,
-        text: commentText,
-        author,
-        status: 'open',
-        created,
-        replies: [],
-        reactions: {},
+        id, author, created, created_in: V,
+        events: [{ kind: 'created', at_version: V, at: created, anchor: anchor || null, text: commentText }],
       };
       list.push(entry);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      return json(entry);
+      return json(snapshotAt(entry, V));
     }
 
     // Re-anchor a comment. Only the original author can re-anchor their own
-    // comment. Same shape as POST except `id` and `anchor` are required.
+    // comment. Appends an `anchor_changed` event stamped at the current
+    // version, so OLDER versions still resolve to the previous anchor.
     if (p === '/api/comments' && method === 'PATCH') {
       const s = await getSession(env, req);
       if (!s) return json({ error: 'sign_in_required' }, { status: 401 });
       let body = {};
       try { body = await req.json(); } catch {}
-      const { slug, id, anchor } = body;
+      const { slug, id, anchor, version } = body;
       if (!slug || !id || !anchor) return json({ error: 'slug, id, anchor required' }, { status: 400 });
       const raw = await env.META.get(`comments:${slug}`);
       const list = raw ? JSON.parse(raw) : [];
+      ensureMigrated(list);
       const target = list.find(c => c.id === id);
       if (!target) return json({ error: 'not_found' }, { status: 404 });
       if (target.author && target.author.login !== s.login) {
         return json({ error: 'not_author' }, { status: 403 });
       }
-      // Re-anchoring repoints the comment at different text, so any prior
-      // agent verdict is stale — clear status/applied_in and the agent's
-      // reaction. The thread (replies, human reactions) stays.
-      target.anchor = anchor;
-      target.status = 'open';
-      delete target.applied_in;
-      setAgentReaction(target, null);
+      const V = Number(version) || target.created_in || 1;
+      appendEvent(target, {
+        kind: 'anchor_changed', at_version: V, at: new Date().toISOString(),
+        anchor, reset_status: true, by: s.login,
+      });
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      return json(target);
+      return json(snapshotAt(target, V));
     }
 
     // Admin: wipe ALL comments for a slug (doc owner only — uses the same
@@ -819,6 +1049,11 @@ export default {
       await env.META.delete(`comments:${slug}`);
       return json({ ok: true, deleted: before });
     }
+    // Soft-delete: append a `deleted` event at the current version. The
+    // record is preserved; older versions still see the comment as it was.
+    // Author-only. ?version=N to stamp the delete at a specific version
+    // (defaults to Infinity, meaning "delete forward from now" which the
+    // overlay supplies as the current view's version).
     if (p === '/api/comments' && method === 'DELETE') {
       const s = await getSession(env, req);
       if (!s) return json({ error: 'sign_in_required' }, { status: 401 });
@@ -827,69 +1062,95 @@ export default {
       if (!slug || !id) return json({ error: 'slug and id required' }, { status: 400 });
       const raw = await env.META.get(`comments:${slug}`);
       const list = raw ? JSON.parse(raw) : [];
+      ensureMigrated(list);
+      const V = parseVersionParam(url);
+      const stampVersion = Number.isFinite(V) ? V : 999999;  // "forever" if unspecified
 
-      // Top-level comment?
+      // Top-level?
       const top = list.find(c => c.id === id);
       if (top) {
         if (top.author && top.author.login !== s.login) {
           return json({ error: 'not_author' }, { status: 403 });
         }
-        await env.META.put(`comments:${slug}`, JSON.stringify(list.filter(c => c.id !== id)));
+        appendEvent(top, {
+          kind: 'deleted', at_version: stampVersion, at: new Date().toISOString(), by: s.login,
+        });
+        await env.META.put(`comments:${slug}`, JSON.stringify(list));
         return json({ ok: true });
       }
-      // Otherwise, find reply
+      // Reply?
       for (const c of list) {
-        if (!Array.isArray(c.replies)) continue;
-        const r = c.replies.find(r => r.id === id);
-        if (r) {
-          if (r.author && r.author.login !== s.login) {
-            return json({ error: 'not_author' }, { status: 403 });
-          }
-          c.replies = c.replies.filter(r => r.id !== id);
-          await env.META.put(`comments:${slug}`, JSON.stringify(list));
-          return json({ ok: true });
+        ensureEventLog(c);
+        const reply = (c.events || []).find(e => e.kind === 'reply_added' && e.reply && e.reply.id === id);
+        if (!reply) continue;
+        if (reply.reply.author && reply.reply.author.login !== s.login) {
+          return json({ error: 'not_author' }, { status: 403 });
         }
+        appendEvent(c, {
+          kind: 'reply_deleted', at_version: stampVersion, at: new Date().toISOString(),
+          reply_id: id, by: s.login,
+        });
+        await env.META.put(`comments:${slug}`, JSON.stringify(list));
+        return json({ ok: true });
       }
       return json({ error: 'not_found' }, { status: 404 });
     }
 
     // ---- reactions: toggle emoji on a comment OR reply ----
+    // Versioned: appends reaction_added or reaction_removed at the current
+    // view's version. ?version=N (or body.version) tags the event so older
+    // versions don't see the reaction.
     if (p === '/api/reactions' && method === 'POST') {
       const s = await getSession(env, req);
       if (!s) return json({ error: 'sign_in_required' }, { status: 401 });
       let body = {};
       try { body = await req.json(); } catch {}
-      const { slug, comment_id, emoji } = body;
+      const { slug, comment_id, emoji, version } = body;
       if (!slug || !comment_id || !emoji) return json({ error: 'slug, comment_id, emoji required' }, { status: 400 });
-      // Basic emoji sanity: <= 8 chars (covers ZWJ sequences), non-empty
       if (emoji.length > 8 || emoji.length === 0) return json({ error: 'invalid_emoji' }, { status: 400 });
 
       const raw = await env.META.get(`comments:${slug}`);
       const list = raw ? JSON.parse(raw) : [];
+      ensureMigrated(list);
+      const V = Number(version) || 1;
 
-      function toggle(target) {
-        if (!target.reactions) target.reactions = {};
-        const users = target.reactions[emoji] || [];
-        const idx = users.indexOf(s.login);
-        if (idx >= 0) users.splice(idx, 1);
-        else users.push(s.login);
-        if (users.length === 0) delete target.reactions[emoji];
-        else target.reactions[emoji] = users;
-      }
-
-      let target = list.find(c => c.id === comment_id);
-      if (!target) {
+      // Find the comment (and whether this is a reply) by id.
+      let host = list.find(c => c.id === comment_id);
+      let isReply = false;
+      let replyId = null;
+      if (!host) {
         for (const c of list) {
-          if (!Array.isArray(c.replies)) continue;
-          const r = c.replies.find(r => r.id === comment_id);
-          if (r) { target = r; break; }
+          const reAdded = (c.events || []).find(e => e.kind === 'reply_added' && e.reply?.id === comment_id);
+          if (reAdded) { host = c; isReply = true; replyId = comment_id; break; }
         }
       }
-      if (!target) return json({ error: 'not_found' }, { status: 404 });
+      if (!host) return json({ error: 'not_found' }, { status: 404 });
 
-      toggle(target);
+      // Determine current state of THIS user's reaction at version V by folding.
+      const snap = snapshotAt(host, V);
+      if (!snap) return json({ error: 'not_visible_at_version' }, { status: 404 });
+      const currentReactions = isReply
+        ? (snap.replies.find(r => r.id === replyId)?.reactions || {})
+        : snap.reactions;
+      const userHadIt = (currentReactions[emoji] || []).includes(s.login);
+
+      const evt = {
+        at_version: V, at: new Date().toISOString(),
+        emoji, by: s.login,
+      };
+      if (isReply) {
+        evt.kind = userHadIt ? 'reply_reaction_removed' : 'reply_reaction_added';
+        evt.reply_id = replyId;
+      } else {
+        evt.kind = userHadIt ? 'reaction_removed' : 'reaction_added';
+      }
+      appendEvent(host, evt);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      return json({ ok: true, reactions: target.reactions });
+      const fresh = snapshotAt(host, V);
+      const reactions = isReply
+        ? (fresh.replies.find(r => r.id === replyId)?.reactions || {})
+        : fresh.reactions;
+      return json({ ok: true, reactions });
     }
 
     // ---- agent reply (from `tdoc edit` after applying a comment) ----
@@ -909,55 +1170,64 @@ export default {
       if (!slug || !parent_id || !replyText) return json({ error: 'slug, parent_id, text required' }, { status: 400 });
       const raw = await env.META.get(`comments:${slug}`);
       const list = raw ? JSON.parse(raw) : [];
+      ensureMigrated(list);
       const parent = list.find(c => c.id === parent_id);
       if (!parent) return json({ error: 'parent_not_found' }, { status: 404 });
-      if (!Array.isArray(parent.replies)) parent.replies = [];
-      const reply = {
-        id: `r_${Date.now()}_${rand(4)}`,
-        parent_id,
-        text: replyText,
-        author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
-        agent_status: ['applied', 'partial', 'question'].includes(agentStatus) ? agentStatus : null,
-        created: new Date().toISOString(),
-        reactions: {},
-      };
-      parent.replies.push(reply);
-      if (agentStatus === 'applied') {
-        parent.status = 'applied';
-        if (applied_in) parent.applied_in = applied_in;
-      } else if (agentStatus === 'question' || agentStatus === 'partial') {
-        parent.status = 'open';
+
+      const verdict = ['applied', 'partial', 'question'].includes(agentStatus) ? agentStatus : null;
+      const V = Number(applied_in) || parent.created_in || 1;
+      const now = new Date().toISOString();
+      const replyId = `r_${Date.now()}_${rand(4)}`;
+
+      appendEvent(parent, {
+        kind: 'reply_added', at_version: V, at: now,
+        reply: {
+          id: replyId,
+          author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
+          text: replyText,
+          agent_status: verdict,
+        },
+      });
+      if (verdict === 'applied') {
+        appendEvent(parent, {
+          kind: 'marked_applied', at_version: V, at: now,
+          applied_in: V, by: 'tdoc-agent', agent_status: 'applied',
+        });
+      } else if (verdict === 'partial' || verdict === 'question') {
+        // Surface the verdict as an open-status event (carries the emoji
+        // synthetically through snapshotAt) so cards show 🟡/❓ on the parent.
+        appendEvent(parent, {
+          kind: 'marked_open', at_version: V, at: now,
+          by: 'tdoc-agent', agent_status: verdict,
+        });
       }
-      // OPTIONAL: when the agent resolves a comment, it can also BIND the
-      // anchor to a specific artifact aid. This is the right behavior when
-      // a user-created comment lacks an element anchor (e.g. kind:"none"
-      // because the click missed the artifact) but the comment text clearly
-      // references "this artifact" and the agent has identified the target.
-      // Without this, agent replies could only resolve status; rebinding
-      // required the original author's session, which is impossible from
-      // a CI / agent context.
+      // Optional anchor rebind from the agent — emits a real anchor_changed.
       if (bind_anchor_aid && typeof bind_anchor_aid === 'string') {
-        if (!parent.anchor) parent.anchor = {};
-        const fallback = parent.anchor.fallback;
-        const priorAid = parent.anchor.aid;
-        const priorHistory = Array.isArray(parent.anchor.aid_history) ? parent.anchor.aid_history : [];
-        // Preserve any aid this comment was previously bound to so older
-        // versions still resolve. See reconcileAnchors for the same rule.
-        const history = [];
-        if (priorAid && priorAid !== bind_anchor_aid) history.push(priorAid);
-        for (const x of priorHistory) if (x && x !== bind_anchor_aid && !history.includes(x)) history.push(x);
-        parent.anchor = {
-          kind: 'element',
-          aid: bind_anchor_aid,
-          selector: `[data-tdoc-aid="${bind_anchor_aid}"]`,
-          label: parent.anchor.label || 'svg',
-          ...(history.length ? { aid_history: history } : {}),
-          ...(fallback ? { fallback } : {}),
-        };
+        // Carry forward any prior label/fallback so the new anchor shape
+        // mirrors what an author re-anchor would produce.
+        const cur = snapshotAt(parent, V) || {};
+        const fallback = cur.anchor?.fallback;
+        const label = cur.anchor?.label || 'svg';
+        appendEvent(parent, {
+          kind: 'anchor_changed', at_version: V, at: now, by: 'tdoc-agent',
+          reset_status: false,
+          anchor: {
+            kind: 'element',
+            aid: bind_anchor_aid,
+            selector: `[data-tdoc-aid="${bind_anchor_aid}"]`,
+            label,
+            ...(fallback ? { fallback } : {}),
+          },
+        });
       }
-      setAgentReaction(parent, agentStatus);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      return json(reply);
+      // Return shape matches the pre-rewrite payload (a reply object) for
+      // backwards-compat with `tdoc edit` callers.
+      return json({
+        id: replyId, parent_id, text: replyText,
+        author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
+        agent_status: verdict, created: now, reactions: {},
+      });
     }
 
     // ---- admin upload (from `tdoc publish`) ----
@@ -1001,7 +1271,7 @@ export default {
         if (raw) {
           const list = JSON.parse(raw);
           const before = JSON.stringify(list);
-          reconcileAnchors(list, aids);
+          reconcileAnchors(list, aids, version);
           const after = JSON.stringify(list);
           if (after !== before) await env.META.put(cKey, after);
         }

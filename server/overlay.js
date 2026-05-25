@@ -1218,7 +1218,7 @@
     card.querySelectorAll('.del').forEach(del => {
       del.onclick = async (e) => {
         e.stopPropagation();
-        const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}&id=${del.dataset.id}`, { method: 'DELETE' });
+        const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}&id=${del.dataset.id}&version=${version}`, { method: 'DELETE' });
         if (!r.ok) {
           // Surface the failure instead of silently re-rendering the comment.
           const err = await r.json().catch(() => ({}));
@@ -1252,7 +1252,7 @@
         const r = await fetch('/api/comments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, parent_id: comment.id, text })
+          body: JSON.stringify({ slug, parent_id: comment.id, text, version })
         });
         if (r.status === 401) { startDeviceFlow(); return; }
         replyTa.value = '';
@@ -1273,7 +1273,7 @@
         if (isPublished && !identity) { startDeviceFlow(); return; }
         await fetch('/api/reactions', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, comment_id: chip.dataset.targetId, emoji: chip.dataset.emoji })
+          body: JSON.stringify({ slug, comment_id: chip.dataset.targetId, emoji: chip.dataset.emoji, version })
         });
         await refreshComments();
       };
@@ -1320,7 +1320,7 @@
         closeEmojiPicker();
         await fetch('/api/reactions', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, comment_id: targetId, emoji })
+          body: JSON.stringify({ slug, comment_id: targetId, emoji, version })
         });
         await refreshComments();
       };
@@ -1544,7 +1544,7 @@
       }
     } else {
       try {
-        const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}`);
+        const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}&version=${version}`);
         list = await r.json();
       } catch { list = []; }
     }
@@ -2381,7 +2381,7 @@
       window.getSelection()?.removeAllRanges();
       fetch('/api/comments', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug, id, anchor: newAnchor }),
+        body: JSON.stringify({ slug, id, anchor: newAnchor, version }),
       }).then(r => {
         if (r.status === 401) startDeviceFlow();
         return r.ok ? refreshComments() : null;
@@ -2437,7 +2437,7 @@
     rebuildSharedHighlights();
     const r = await fetch('/api/comments', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug, id, anchor: { kind: 'none', fallback } }),
+      body: JSON.stringify({ slug, id, anchor: { kind: 'none', fallback }, version }),
     });
     if (r.status === 401) { startDeviceFlow(); return; }
     if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Could not remove anchor: ' + (err.error || `HTTP ${r.status}`)); return; }
