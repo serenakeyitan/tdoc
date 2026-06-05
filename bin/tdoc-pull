@@ -2,6 +2,12 @@
 # tdoc-pull — pull comments from the published Worker back to local comments.json.
 #
 # Usage: tdoc-pull <slug>
+#
+# Pulls the FULL cross-version history (?version=all) so comments anchored to an
+# older version are never dropped. Writes non-destructively: the previous
+# comments.json is backed up, and any local-only comments (present locally but
+# absent on the worker, e.g. created before publish) are merged in rather than
+# clobbered.
 set -euo pipefail
 
 SLUG="${1:-}"
@@ -22,5 +28,39 @@ BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
 
 OUT="$TDOC_DIR/$SLUG/comments.json"
 mkdir -p "$(dirname "$OUT")"
-curl -sS "$BASE/api/comments?slug=$SLUG" | jq . > "$OUT"
+
+# Fetch the FULL history (all versions). Without version=all the worker returns
+# only the latest snapshot, which silently drops comments created on earlier
+# versions (root cause of "comments disappear on pull").
+REMOTE="$(curl -sS "$BASE/api/comments?slug=$SLUG&version=all")"
+
+# Validate the response is a JSON array before touching local state. A transient
+# worker error must never clobber comments.json.
+if ! printf '%s' "$REMOTE" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  echo "tdoc-pull: worker did not return a comment array (network error or bad slug?). Local comments.json left untouched." >&2
+  printf '%s\n' "$REMOTE" | head -c 400 >&2; echo >&2
+  exit 1
+fi
+
+# Non-destructive write: if a local comments.json exists, back it up and merge
+# any local-only comments (by id) that the worker doesn't know about. This
+# preserves comments authored locally before the doc was published, which would
+# otherwise be lost on the first pull.
+if [ -f "$OUT" ] && jq -e 'type == "array"' "$OUT" >/dev/null 2>&1; then
+  cp "$OUT" "$OUT.bak"
+  MERGED="$(jq -n --argjson remote "$REMOTE" --slurpfile local "$OUT" '
+    ($local[0] // []) as $loc
+    | ($remote | map(.id)) as $remoteIds
+    | ($loc | map(select(.id as $i | ($remoteIds | index($i)) | not))) as $localOnly
+    | $remote + $localOnly
+  ')"
+  printf '%s\n' "$MERGED" | jq . > "$OUT"
+  LOCAL_ONLY="$(jq -n --argjson m "$MERGED" --argjson r "$REMOTE" '($m | length) - ($r | length)')"
+  if [ "$LOCAL_ONLY" -gt 0 ] 2>/dev/null; then
+    echo "Merged $LOCAL_ONLY local-only comment(s) the worker didn't have (backup at $OUT.bak)."
+  fi
+else
+  printf '%s\n' "$REMOTE" | jq . > "$OUT"
+fi
+
 echo "Pulled $(jq 'length' "$OUT") comments for $SLUG -> $OUT"

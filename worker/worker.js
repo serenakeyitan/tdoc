@@ -639,6 +639,23 @@ function snapshotList(list, V) {
   return out;
 }
 
+// Fold EVERY comment that ever existed across ALL versions, regardless of the
+// version it was created in. This is the durable, lossless view used by
+// `tdoc-pull` so that pulling never drops comments anchored to an older
+// version (snapshotList at latest would hide a comment created on v3 once the
+// doc is on v5). Each comment is folded at Infinity (its richest state).
+// Deleted comments are still excluded — a delete is an intentional removal,
+// not version scoping.
+function historyList(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const c of list) {
+    const s = snapshotAt(c, Infinity);
+    if (s && !s.deleted) out.push(s);
+  }
+  return out;
+}
+
 // Helper used by all mutating endpoints: ensure the list is migrated to the
 // event-log shape before we touch it. Returns the (possibly mutated) list.
 function ensureMigrated(list) {
@@ -656,10 +673,13 @@ function appendEvent(c, event) {
 }
 
 // Parse the version query param. Returns Infinity when missing/invalid so
-// caller gets the latest snapshot (matches pre-versioned behavior).
+// caller gets the latest snapshot (matches pre-versioned behavior). The
+// sentinel string 'all' requests the full cross-version history (used by
+// tdoc-pull) so callers can opt out of version scoping entirely.
 function parseVersionParam(url) {
   const v = url.searchParams.get('version');
   if (v == null || v === '') return Infinity;
+  if (v === 'all') return 'all';
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : Infinity;
 }
@@ -967,7 +987,10 @@ export default {
         await env.META.put(`comments:${slug}`, JSON.stringify(list));
       }
       const V = parseVersionParam(url);
-      return json(snapshotList(list, V));
+      // `?version=all` returns every comment across all versions (lossless,
+      // used by tdoc-pull). A numeric/absent version returns that version's
+      // snapshot (used by the overlay viewing a specific /v/<n>).
+      return json(V === 'all' ? historyList(list) : snapshotList(list, V));
     }
 
     if (p === '/api/comments' && method === 'POST') {
