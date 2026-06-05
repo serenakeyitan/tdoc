@@ -287,11 +287,17 @@ function reconcileAnchors(comments, aidsInVersion, V) {
     const snap = snapshotAt(c, version);
     if (!snap || snap.deleted) continue;
     const a = snap.anchor;
-    if (!a || a.kind !== 'element') continue;
+    // Element anchors can drift; `lost` anchors can RECOVER if the artifact
+    // returns in a later version. Both must run through the fingerprint match
+    // below. Previously `lost` anchors hit `a.kind !== 'element'` → continue,
+    // so once lost they were orphaned forever even when the target came back.
+    // (text anchors are resolved client-side, not here.)
+    if (!a || (a.kind !== 'element' && a.kind !== 'lost')) continue;
 
     const knownAid = a.aid
       || (a.selector && /\[data-tdoc-aid="([\w]+)"\]/.exec(a.selector || '')?.[1]);
-    // Already valid in this version → nothing to do.
+    // Already valid in this version → nothing to do. (lost anchors have no aid,
+    // so they always fall through to the re-bind attempt.)
     if (knownAid && byAid.has(knownAid)) continue;
 
     // Try fingerprint + heading match against this version's artifacts.
@@ -324,10 +330,12 @@ function reconcileAnchors(comments, aidsInVersion, V) {
           ...(a.fallback ? { fallback: a.fallback } : {}),
         },
       });
-    } else {
-      // No confident match → mark anchor lost in this version. Older
-      // versions keep their valid anchors (because they fold to earlier
-      // anchor_changed / created events that still resolve).
+    } else if (a.kind !== 'lost') {
+      // No confident match AND it wasn't already lost → mark it lost in this
+      // version. Older versions keep their valid anchors (they fold to earlier
+      // anchor_changed/created events that still resolve). If it was ALREADY
+      // lost and still has no candidate, do nothing — re-appending an identical
+      // lost event every publish would bloat the log for no benefit.
       appendEvent(c, {
         kind: 'anchor_changed', at_version: version, at: now, by: 'reconcile',
         reset_status: false,
@@ -767,6 +775,23 @@ function dedupEvents(events) {
     out.push(lastByEid.get(id));
   }
   return out;
+}
+
+// Permanently collapse each comment's event log to its deduped form. Called at
+// publish time so the STORED value stops growing unboundedly toward KV's 25MB
+// cap (superseded reaction toggles, duplicate-eid events from concurrent
+// writes). This is a no-op for correctness — the read-time fold already dedups
+// — it only shrinks what's persisted. Returns true if anything was compacted.
+function compactComments(comments) {
+  let changed = false;
+  if (!Array.isArray(comments)) return false;
+  for (const c of comments) {
+    if (!c || !Array.isArray(c.events)) continue;
+    backfillEids(c.events);
+    const compacted = dedupEvents(c.events);
+    if (compacted.length !== c.events.length) { c.events = compacted; changed = true; }
+  }
+  return changed;
 }
 
 // Parse the version query param. Returns Infinity when missing/invalid so
@@ -1393,6 +1418,7 @@ export default {
           const list = JSON.parse(raw);
           const before = JSON.stringify(list);
           reconcileAnchors(list, aids, version);
+          compactComments(list); // bound KV growth: collapse superseded/dup events
           const after = JSON.stringify(list);
           if (after !== before) await env.META.put(cKey, after);
         }
