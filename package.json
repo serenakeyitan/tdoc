@@ -1,0 +1,9 @@
+{
+  "name": "tdoc",
+  "private": true,
+  "description": "Prompt-native interactive HTML documents — local server, Cloudflare Worker, browser overlay.",
+  "scripts": {
+    "test": "node test/run.js",
+    "test:all": "node test/run.js --all"
+  }
+}

@@ -72,15 +72,24 @@ t('link points at the latest version with encoded slug', () => {
   assert(latestUrl('a b/c', 2) === '/d/a%20b%2Fc/v/2', 'slug must be URL-encoded');
 });
 
-// Guard: the real overlay.js must still contain the exact predicate so this
-// test stays coupled to the source. If the guard line changes shape, update
-// both together (and re-confirm the cases above).
+// Source-coupling guards. The cases above run against a MIRROR of the
+// predicate, so on their own they can't catch the real overlay drifting. These
+// guards assert the real overlay.js still has (a) the guard condition, (b) the
+// non-latest comparison, and CRUCIALLY (c) that `versions` is sorted before
+// `latestVersion` is taken as the last element — the mirror sorts internally,
+// so without this guard, deleting the real upstream sort would leave both the
+// mirror and the grep green while shipped code picks the wrong "latest".
 t('overlay.js still contains the published+multi-version guard', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'overlay.js'), 'utf8');
   assert(src.includes('isPublished && versions.length > 1'),
     'guard condition missing/changed in overlay.js — re-verify show/hide cases');
   assert(src.includes('version < latestVersion'),
     'non-latest comparison missing/changed in overlay.js');
+  // latestVersion must be derived from a SORTED versions array.
+  assert(/versions\.sort\(/.test(src),
+    'overlay.js no longer sorts versions — latestVersion (last element) could be wrong');
+  assert(/latestVersion = versions\[versions\.length - 1\]\.n/.test(src),
+    'latestVersion derivation changed — re-verify it still takes the max version');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
