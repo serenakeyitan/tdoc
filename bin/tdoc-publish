@@ -31,6 +31,36 @@ WORKER_DIR="$SKILL_DIR/worker"
 
 mkdir -p "$CONFIG_DIR"
 
+# Cloudflare API call with timeouts + HTTP-status validation. Without this, a
+# transient 5xx or an HTML error page (e.g. an expired-OAuth 403 returned as a
+# Cloudflare challenge page) gets jq-parsed as "no result" and silently
+# degrades to "subdomain not claimed" / "not configured" — or a hung endpoint
+# hangs publish forever. Usage:
+#   body="$(cf_api GET  "<url>" "$oauth_token")" || exit 1
+#   body="$(cf_api POST "<url>" "$oauth_token" '<json>')" || exit 1
+# On non-2xx HTTP status it prints the status+body to stderr and returns 1.
+cf_api() {
+  local verb="$1" url="$2" tok="$3" data="${4:-}"
+  local resp http
+  if [ "$verb" = "POST" ]; then
+    resp="$(curl -sS --connect-timeout 10 --max-time 30 -w $'\n%{http_code}' \
+      -X POST "$url" -H "Authorization: Bearer $tok" -H "Content-Type: application/json" -d "$data" 2>&1)" || {
+        echo "[tdoc] network error calling $url" >&2; return 1; }
+  else
+    resp="$(curl -sS --connect-timeout 10 --max-time 30 -w $'\n%{http_code}' \
+      "$url" -H "Authorization: Bearer $tok" 2>&1)" || {
+        echo "[tdoc] network error calling $url" >&2; return 1; }
+  fi
+  http="${resp##*$'\n'}"        # last line = status code
+  local payload="${resp%$'\n'*}" # everything before it = body
+  if ! printf '%s' "$http" | grep -qE '^2[0-9][0-9]$'; then
+    echo "[tdoc] Cloudflare API $verb $url returned HTTP $http" >&2
+    printf '%s\n' "$payload" | head -c 400 >&2; echo >&2
+    return 1
+  fi
+  printf '%s' "$payload"
+}
+
 # When publishing fails for a setup reason (missing dep, R2 not enabled,
 # wrangler logged out), we emit a paste-into-agent prompt instead of a
 # cryptic shell error. The publish modal surfaces stderr to the user, so
@@ -119,8 +149,10 @@ first_time_setup() {
   fi
 
   local sub_resp
-  sub_resp="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/subdomain" \
-    -H "Authorization: Bearer $oauth_token")"
+  sub_resp="$(cf_api GET "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/subdomain" "$oauth_token")" || {
+    echo "[tdoc] could not query workers.dev subdomain (see error above). Aborting rather than guessing." >&2
+    exit 1
+  }
   SUBDOMAIN="$(echo "$sub_resp" | jq -r '.result.subdomain // empty')"
 
   if [ -z "$SUBDOMAIN" ] || [ "$SUBDOMAIN" = "null" ]; then
@@ -137,7 +169,10 @@ first_time_setup() {
   # 3. create R2 bucket (idempotent via API)
   echo "[tdoc] ensuring R2 bucket tdoc-docs exists..."
   local r2_resp
-  r2_resp="$(curl -sS -X POST "https://api.cloudflare.com/client/v4/accounts/$account_id/r2/buckets" \
+  # R2 create intentionally inspects error codes (10042 not-enabled / 10004
+  # already-exists) which come back as non-2xx, so we add timeouts here but keep
+  # the body-code logic rather than gating on HTTP status via cf_api.
+  r2_resp="$(curl -sS --connect-timeout 10 --max-time 30 -X POST "https://api.cloudflare.com/client/v4/accounts/$account_id/r2/buckets" \
     -H "Authorization: Bearer $oauth_token" \
     -H "Content-Type: application/json" \
     -d '{"name":"tdoc-docs"}')"
@@ -157,15 +192,17 @@ first_time_setup() {
   # 4. create or find KV namespace META (idempotent via API)
   echo "[tdoc] ensuring KV namespace META exists..."
   local kv_id kv_list
-  kv_list="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$account_id/storage/kv/namespaces?per_page=100" \
-    -H "Authorization: Bearer $oauth_token")"
+  kv_list="$(cf_api GET "https://api.cloudflare.com/client/v4/accounts/$account_id/storage/kv/namespaces?per_page=100" "$oauth_token")" || {
+    echo "[tdoc] could not list KV namespaces (see error above). Aborting." >&2
+    exit 1
+  }
   kv_id="$(echo "$kv_list" | jq -r '.result[]? | select(.title=="META") | .id' | head -1)"
   if [ -z "$kv_id" ]; then
     local create_resp
-    create_resp="$(curl -sS -X POST "https://api.cloudflare.com/client/v4/accounts/$account_id/storage/kv/namespaces" \
-      -H "Authorization: Bearer $oauth_token" \
-      -H "Content-Type: application/json" \
-      -d '{"title":"META"}')"
+    create_resp="$(cf_api POST "https://api.cloudflare.com/client/v4/accounts/$account_id/storage/kv/namespaces" "$oauth_token" '{"title":"META"}')" || {
+      echo "[tdoc] could not create KV namespace META (see error above). Aborting." >&2
+      exit 1
+    }
     kv_id="$(echo "$create_resp" | jq -r '.result.id // empty')"
   fi
   if [ -z "$kv_id" ]; then
@@ -240,6 +277,16 @@ fi
 SUBDOMAIN="$(jq -r .subdomain "$CONFIG_FILE")"
 TOKEN="$(jq -r .upload_token "$CONFIG_FILE")"
 WORKER_NAME="$(jq -r .worker "$CONFIG_FILE")"
+# Validate the config rather than letting a missing field become the literal
+# string "null" → "https://null.null.workers.dev" + "Bearer null". A corrupt or
+# partial published.json should fail loudly, not publish to a bogus host.
+for _f in SUBDOMAIN:subdomain TOKEN:upload_token WORKER_NAME:worker; do
+  _var="${_f%%:*}"; _key="${_f##*:}"; _val="$(eval "printf '%s' \"\$$_var\"")"
+  if [ -z "$_val" ] || [ "$_val" = "null" ]; then
+    echo "[tdoc] $CONFIG_FILE is missing or has a null '$_key'. Delete it and re-run /tdoc publish to re-setup." >&2
+    exit 1
+  fi
+done
 PUBLIC_HOST="$(jq -r '.public_host // empty' "$CONFIG_FILE")"
 CUSTOM_DOMAIN="$(jq -r '.custom_domain // empty' "$CONFIG_FILE")"
 # Fallback for configs created before the domain choice was added
@@ -308,10 +355,10 @@ upload_version() {
     --slurpfile meta "$META_FILE" \
     '{slug:$slug, version:$version, html:$html, meta: $meta[0]}')"
   local resp
-  resp="$(curl -sS -X POST "$UPLOAD_BASE/api/upload" \
+  resp="$(curl -sS --connect-timeout 10 --max-time 120 -X POST "$UPLOAD_BASE/api/upload" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    --data-binary "$payload")"
+    --data-binary "$payload")" || { echo "[tdoc] v$v upload: network error/timeout" >&2; return 1; }
   local ok
   ok="$(echo "$resp" | jq -r '.ok // false')"
   if [ "$ok" = "true" ]; then
@@ -328,10 +375,25 @@ upload_version() {
 # meta KV ends up pointing at the actual newest version.
 LOCAL_VERSIONS="$(jq -r '.versions | sort_by(.n) | .[].n' "$META_FILE")"
 echo "[tdoc] uploading $SLUG versions: $(echo "$LOCAL_VERSIONS" | tr '\n' ' ')"
+# Older versions are best-effort: a transient failure on an OLD version must NOT
+# abort the publish before the LATEST version + meta land (otherwise meta
+# advertises a version whose R2 object 404s). We collect older-version failures
+# and report them, but only the latest version's upload is allowed to hard-fail
+# the publish. (|| true guards against set -e on the best-effort uploads.)
+OLDER_FAILED=""
 for v in $LOCAL_VERSIONS; do
-  if [ "$v" != "$VERSION" ]; then upload_version "$v"; fi
+  if [ "$v" != "$VERSION" ]; then
+    upload_version "$v" || OLDER_FAILED="$OLDER_FAILED $v"
+  fi
 done
-upload_version "$VERSION"
+# The latest version is the contract — if this fails, the whole publish fails.
+upload_version "$VERSION" || {
+  echo "[tdoc] FATAL: latest version v$VERSION failed to upload — aborting." >&2
+  exit 1
+}
+if [ -n "$OLDER_FAILED" ]; then
+  echo "[tdoc] WARNING: older version(s) failed to upload:$OLDER_FAILED — latest is live; re-run /tdoc publish to retry them." >&2
+fi
 echo
 echo "Published: $PUBLIC_BASE/d/$SLUG/v/$VERSION"
 if [ -n "$CUSTOM_DOMAIN" ] && [ "$PUBLIC_HOST" = "$CUSTOM_DOMAIN" ]; then

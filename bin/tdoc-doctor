@@ -70,7 +70,7 @@ if $wrangler_ok && [ -z "${TDOC_MOCK_NO_CF_LOGIN:-}" ]; then
     if [ -n "$cf_account_id" ] && [ -n "$oauth_token" ]; then
       # Probe subdomain
       if [ -z "${TDOC_MOCK_NO_SUBDOMAIN:-}" ]; then
-        sub_resp="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$cf_account_id/workers/subdomain" \
+        sub_resp="$(curl -sS --connect-timeout 10 --max-time 30 "https://api.cloudflare.com/client/v4/accounts/$cf_account_id/workers/subdomain" \
           -H "Authorization: Bearer $oauth_token" 2>/dev/null || true)"
         if [ -n "$sub_resp" ] && $jq_ok; then
           cf_subdomain="$(echo "$sub_resp" | jq -r '.result.subdomain // empty' 2>/dev/null || true)"
@@ -79,7 +79,7 @@ if $wrangler_ok && [ -z "${TDOC_MOCK_NO_CF_LOGIN:-}" ]; then
       fi
       # Probe R2 (list buckets — fails with 10042 if disabled)
       if [ -z "${TDOC_MOCK_NO_R2:-}" ]; then
-        r2_resp="$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$cf_account_id/r2/buckets" \
+        r2_resp="$(curl -sS --connect-timeout 10 --max-time 30 "https://api.cloudflare.com/client/v4/accounts/$cf_account_id/r2/buckets" \
           -H "Authorization: Bearer $oauth_token" 2>/dev/null || true)"
         if [ -n "$r2_resp" ] && $jq_ok; then
           err_code="$(echo "$r2_resp" | jq -r '.errors[0].code // empty' 2>/dev/null || true)"

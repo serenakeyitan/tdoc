@@ -102,34 +102,44 @@ SKILL_DIR="$HOME/.claude/skills/tdoc"
 DOC_DIR="$TDOC_DIR/$SLUG"
 V1_DIR="$DOC_DIR/v1"
 
-if [ -d "$DOC_DIR" ]; then
-  if [ "$FORCE" = "1" ]; then
-    info "overwriting existing slug '$SLUG' (--force)"
-    rm -rf "$DOC_DIR"
-  else
-    die "slug '$SLUG' already exists at $DOC_DIR; use --force to overwrite, or a different slug"
-  fi
+if [ -d "$DOC_DIR" ] && [ "$FORCE" != "1" ]; then
+  die "slug '$SLUG' already exists at $DOC_DIR; use --force to overwrite, or a different slug"
 fi
 
-mkdir -p "$V1_DIR"
-HTML_PATH="$V1_DIR/index.html"
+# Stage-validate-swap: write + validate the new HTML in a TEMP dir first, and
+# only replace the existing doc once it passes. Previously --force did
+# `rm -rf "$DOC_DIR"` BEFORE validating, so empty stdin / a failed cp / markdown
+# passed by mistake permanently destroyed the prior doc's versions + comments.
+STAGE_DIR="$(mktemp -d "${TDOC_DIR}/.stage-${SLUG}.XXXXXX")"
+cleanup_stage() { rm -rf "$STAGE_DIR" 2>/dev/null || true; }
+trap cleanup_stage EXIT
+mkdir -p "$STAGE_DIR/v1"
+STAGE_HTML="$STAGE_DIR/v1/index.html"
 
-# ─────────────────────────────── write HTML ───────────────────────────────
 if [ "$HTML_STDIN" = "1" ]; then
-  cat > "$HTML_PATH"
+  cat > "$STAGE_HTML"
 else
-  cp "$HTML_FILE" "$HTML_PATH"
+  cp "$HTML_FILE" "$STAGE_HTML" || die "could not read --html-file '$HTML_FILE'"
 fi
 
-if [ ! -s "$HTML_PATH" ]; then
-  rm -rf "$DOC_DIR"
-  die "html content was empty"
+if [ ! -s "$STAGE_HTML" ]; then
+  die "html content was empty (existing doc, if any, left untouched)"
 fi
 # Cheap sanity check: catches "agent handed us markdown instead of HTML"
-if ! grep -qi '<body' "$HTML_PATH"; then
-  rm -rf "$DOC_DIR"
-  die "html does not contain a <body> tag — did you pass markdown by mistake?"
+if ! grep -qi '<body' "$STAGE_HTML"; then
+  die "html does not contain a <body> tag — did you pass markdown by mistake? (existing doc left untouched)"
 fi
+
+# Validation passed — NOW it's safe to replace. Swap the existing doc out only
+# at this point. (Same-filesystem mv under TDOC_DIR, so this is atomic-ish.)
+if [ -d "$DOC_DIR" ]; then
+  info "overwriting existing slug '$SLUG' (--force)"
+  rm -rf "$DOC_DIR"
+fi
+mkdir -p "$DOC_DIR"
+mv "$STAGE_DIR/v1" "$DOC_DIR/v1"
+V1_DIR="$DOC_DIR/v1"
+HTML_PATH="$V1_DIR/index.html"
 
 # ─────────────────────────────── meta.json ────────────────────────────────
 CREATED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -155,14 +165,26 @@ printf '[]\n' > "$DOC_DIR/comments.json"
 info "scaffolded $DOC_DIR (v1)"
 
 # ───────────────────────── ensure local server up ────────────────────────
-if ! curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1; then
+SERVER_UP=0
+if curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1; then
+  SERVER_UP=1
+else
   info "local server down; starting..."
   nohup node "$SKILL_DIR/server/server.js" > "$TDOC_DIR/.server.log" 2>&1 &
   # Wait briefly so the URL we print is actually reachable.
-  for _ in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5 6 7 8; do
     sleep 0.3
-    curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1 && break
+    if curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1; then SERVER_UP=1; break; fi
   done
+fi
+
+# Don't print a success URL the caller will capture if the server never came
+# up — that hands back a dead URL with exit 0. Fail loudly with the log tail.
+if [ "$SERVER_UP" != "1" ]; then
+  echo "[tdoc] local server failed to start — the doc was scaffolded at $DOC_DIR but is not being served." >&2
+  echo "[tdoc] last lines of $TDOC_DIR/.server.log:" >&2
+  tail -n 15 "$TDOC_DIR/.server.log" >&2 2>/dev/null || true
+  exit 1
 fi
 
 LOCAL_URL="http://localhost:7878/d/$SLUG/v/1"
