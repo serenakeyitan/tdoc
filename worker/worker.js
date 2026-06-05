@@ -1398,7 +1398,7 @@ export default {
       if (unauth) return unauth;
       let body = {};
       try { body = await req.json(); } catch {}
-      const { slug, version, html: doc, meta } = body;
+      const { slug, version, html: doc, meta, comments: localComments } = body;
       if (!slug || !version || !doc) return json({ error: 'slug, version, html required' }, { status: 400 });
       // Identity-stamp every commentable artifact with a content-hashed
       // data-tdoc-aid. The SAME artifact in a different version has the
@@ -1427,21 +1427,41 @@ export default {
       // bind by aid where possible; mark lost where the artifact is gone
       // or ambiguous. This is the ENFORCED publish-time invariant — no
       // agent honesty required, no silent re-anchoring to wrong artifacts.
+      let mergedLocal = 0;
       try {
         const cKey = `comments:${slug}`;
         const raw = await env.META.get(cKey);
-        if (raw) {
-          const list = JSON.parse(raw);
-          const before = JSON.stringify(list);
+        const list = raw ? JSON.parse(raw) : [];
+        const before = JSON.stringify(list);
+
+        // Merge locally-authored comments (sent by tdoc-publish) NON-
+        // DESTRUCTIVELY: add a local comment only if its id is not already on
+        // the worker. Worker-side comments (authored by real published
+        // commenters) are never deleted or overwritten. Idempotent — re-
+        // publishing the same local set adds nothing. This is the mirror of
+        // tdoc-pull's merge, so local↔worker round-trips converge.
+        if (Array.isArray(localComments) && localComments.length) {
+          const have = new Set(list.map(c => c && c.id).filter(Boolean));
+          for (const lc of localComments) {
+            if (!lc || !lc.id || have.has(lc.id)) continue;
+            ensureEventLog(lc); // normalize flat local shape → event-log shape
+            list.push(lc);
+            have.add(lc.id);
+            mergedLocal++;
+          }
+        }
+
+        if (list.length) {
+          ensureMigrated(list);
           reconcileAnchors(list, aids, version);
           compactComments(list); // bound KV growth: collapse superseded/dup events
-          const after = JSON.stringify(list);
-          if (after !== before) await env.META.put(cKey, after);
         }
+        const after = JSON.stringify(list);
+        if (after !== before) await env.META.put(cKey, after);
       } catch (e) {
-        console.error('[upload] anchor reconcile failed (non-fatal):', e.message);
+        console.error('[upload] comment merge/reconcile failed (non-fatal):', e.message);
       }
-      return json({ ok: true, url: `/d/${slug}/v/${version}`, size: verify.size, aids: aids.length });
+      return json({ ok: true, url: `/d/${slug}/v/${version}`, size: verify.size, aids: aids.length, mergedComments: mergedLocal });
     }
 
     // ---- admin delete ----

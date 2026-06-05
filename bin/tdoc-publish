@@ -347,13 +347,28 @@ upload_version() {
   local v="$1"
   local html_path="$DOC_DIR/v${v}/index.html"
   [ -f "$html_path" ] || { echo "  (v$v missing — skipping)"; return; }
+  # Include locally-authored comments so they reach the worker (#11). The
+  # worker merges them NON-DESTRUCTIVELY by id (never overwrites published
+  # comments) and the merge is idempotent, so sending them on each version
+  # upload is safe. Default to [] when there's no local comments.json.
+  local comments_file="$DOC_DIR/comments.json"
   local payload
-  payload="$(jq -n \
-    --arg slug "$SLUG" \
-    --argjson version "$v" \
-    --rawfile html "$html_path" \
-    --slurpfile meta "$META_FILE" \
-    '{slug:$slug, version:$version, html:$html, meta: $meta[0]}')"
+  if [ -f "$comments_file" ] && jq -e 'type == "array" and length > 0' "$comments_file" >/dev/null 2>&1; then
+    payload="$(jq -n \
+      --arg slug "$SLUG" \
+      --argjson version "$v" \
+      --rawfile html "$html_path" \
+      --slurpfile meta "$META_FILE" \
+      --slurpfile comments "$comments_file" \
+      '{slug:$slug, version:$version, html:$html, meta: $meta[0], comments: $comments[0]}')"
+  else
+    payload="$(jq -n \
+      --arg slug "$SLUG" \
+      --argjson version "$v" \
+      --rawfile html "$html_path" \
+      --slurpfile meta "$META_FILE" \
+      '{slug:$slug, version:$version, html:$html, meta: $meta[0]}')"
+  fi
   local resp
   resp="$(curl -sS --connect-timeout 10 --max-time 120 -X POST "$UPLOAD_BASE/api/upload" \
     -H "Authorization: Bearer $TOKEN" \
@@ -362,7 +377,13 @@ upload_version() {
   local ok
   ok="$(echo "$resp" | jq -r '.ok // false')"
   if [ "$ok" = "true" ]; then
-    echo "[tdoc] v$v uploaded ($(echo "$resp" | jq -r '.size // "?"') bytes)"
+    local merged
+    merged="$(echo "$resp" | jq -r '.mergedComments // 0')"
+    if [ "$merged" != "0" ] && [ "$merged" != "null" ]; then
+      echo "[tdoc] v$v uploaded ($(echo "$resp" | jq -r '.size // "?"') bytes, +$merged local comment(s) merged)"
+    else
+      echo "[tdoc] v$v uploaded ($(echo "$resp" | jq -r '.size // "?"') bytes)"
+    fi
   else
     echo "[tdoc] v$v upload FAILED: $resp" >&2
     return 1
