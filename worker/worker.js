@@ -512,12 +512,24 @@ function legacyToEvents(c) {
   return events;
 }
 
+// Backfill `eid` on any event that lacks one (legacy records, events built by
+// object literals that bypassed appendEvent). Idempotent. Mutates in place;
+// returns true if anything changed. This guarantees dedupEvents (the
+// convergence point) always has an eid to key on.
+function backfillEids(events) {
+  let changed = false;
+  if (!Array.isArray(events)) return false;
+  for (const e of events) { if (e && !e.eid) { e.eid = eventEid(e); changed = true; } }
+  return changed;
+}
+
 // If a record doesn't have `events[]`, build one in-place. Returns true if
-// the record was migrated (caller may want to persist).
+// the record was migrated OR had eids backfilled (caller may want to persist).
 function ensureEventLog(c) {
-  if (c && Array.isArray(c.events)) return false;
+  if (c && Array.isArray(c.events)) return backfillEids(c.events);
   if (!c || !c.id) return false;
   const events = legacyToEvents(c);
+  backfillEids(events);
   c.events = events;
   c.created_in = events[0]?.at_version || Number(c.version) || 1;
   // Author + created are immutable identity, keep them at the top level.
@@ -554,8 +566,19 @@ function snapshotAt(c, V) {
   // Reply folds keyed by reply id, in insertion order.
   const replyOrder = [];
   const replyById = new Map();
-  // Replay events in stored order (which is append-order, monotonic in time).
-  for (const e of c.events) {
+  // Replay events deduped by eid (convergence under concurrent appends — see
+  // dedupEvents) and STABLE-SORTED by at_version. The old code replayed in
+  // physical append order assuming it was monotonic in version, but
+  // anchor_changed/reconcile can append an event stamped at an OLDER version
+  // after a newer one (e.g. re-anchoring while viewing an old version, or a
+  // republish reconcile), letting a backdated event wrongly win the latest
+  // snapshot. Sorting by at_version with a stable tiebreak (original index)
+  // makes the fold order-independent of write order.
+  const ordered = dedupEvents(c.events)
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => ((a.e.at_version || 0) - (b.e.at_version || 0)) || (a.i - b.i))
+    .map(x => x.e);
+  for (const e of ordered) {
     if (!e || !isFiniteVersion(e.at_version) || e.at_version > at) continue;
     switch (e.kind) {
       case 'created':
@@ -695,9 +718,55 @@ function ensureMigrated(list) {
 }
 
 // Append an event to a comment record (auto-creates events[] if missing).
+// Stamp a stable event id so the log converges under concurrent appends.
+// Cloudflare KV has no atomic compare-and-set (the only true serialization is
+// a Durable Object — tracked separately), so two writers can each read, append,
+// and write, with last-write-wins clobbering one append. We make that tolerable
+// instead of corrupting: every event carries an `eid`, and the fold dedups by
+// it (see dedupEvents). Some events are *naturally idempotent* and get a
+// DETERMINISTIC eid so a concurrent duplicate collapses to one:
+//   reaction_added/removed → reaction:<kind>:<emoji>:<by>   (toggle converges)
+//   marked_applied/open/deleted → <kind>:<at_version>       (state, not history)
+// One-shot events (created, reply_added, text_edited, anchor_changed) get a
+// unique eid so each is preserved.
+function eventEid(e) {
+  switch (e.kind) {
+    case 'reaction_added':
+    case 'reaction_removed':
+      return `${e.kind}:${e.emoji}:${e.by}`;
+    case 'marked_applied':
+    case 'marked_open':
+    case 'deleted':
+      return `${e.kind}:${e.at_version}`;
+    default:
+      return `${e.kind}:${e.at}:${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
 function appendEvent(c, event) {
   if (!Array.isArray(c.events)) c.events = [];
+  if (!event.eid) event.eid = eventEid(event);
   c.events.push(event);
+}
+// Collapse events sharing an eid, keeping the last occurrence (last write wins
+// per-event, which is correct for the deterministic-eid state events and
+// harmless for unique-eid history events). Returns a new array in original
+// order of first appearance. This is the convergence point: merging two
+// concurrently-written logs and folding through dedupEvents yields the same
+// result regardless of which write landed last.
+function dedupEvents(events) {
+  if (!Array.isArray(events)) return [];
+  const lastByEid = new Map();
+  for (const e of events) { if (e && e.eid) lastByEid.set(e.eid, e); }
+  const out = [], emitted = new Set();
+  for (const e of events) {
+    if (!e) continue;
+    const id = e.eid;
+    if (id == null) { out.push(e); continue; }
+    if (emitted.has(id)) continue;
+    emitted.add(id);
+    out.push(lastByEid.get(id));
+  }
+  return out;
 }
 
 // Parse the version query param. Returns Infinity when missing/invalid so
@@ -1053,6 +1122,7 @@ export default {
         id, author, created, created_in: V,
         events: [{ kind: 'created', at_version: V, at: created, anchor: anchor || null, text: commentText }],
       };
+      backfillEids(entry.events); // stamp eid before persisting (convergence)
       list.push(entry);
       await env.META.put(`comments:${slug}`, JSON.stringify(list));
       return json(snapshotAt(entry, V));

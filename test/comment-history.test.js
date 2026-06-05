@@ -47,7 +47,8 @@ function sliceFn(name) {
 
 // Dependencies the folding functions reference.
 const deps = [
-  'isFiniteVersion', 'ensureEventLog', 'legacyToEvents', 'snapshotAt',
+  'isFiniteVersion', 'eventEid', 'backfillEids', 'dedupEvents',
+  'ensureEventLog', 'legacyToEvents', 'snapshotAt',
   'snapshotList', 'historyList',
 ].map(sliceFn).join('\n\n');
 
