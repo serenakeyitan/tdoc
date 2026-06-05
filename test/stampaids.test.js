@@ -64,14 +64,20 @@ function buildStamp(src, withNewHelpers) {
 
 const stampNew = buildStamp(newSrc, true);
 
-// Old version (from origin/main) — for the equivalence check. If unavailable,
-// the equivalence cases are skipped (CI without the baseline still runs the
-// correctness cases).
+// The legacy (buggy) parser is shipped IN worker.js as stampAidsLegacy() for the
+// #24 dry-run, so the equivalence check uses it directly — no external baseline
+// file needed (self-sufficient, runs in CI). It's the exact parser stored
+// comments were anchored against.
 let stampOld = null;
 try {
-  const oldSrc = fs.readFileSync('/tmp/worker-old.js', 'utf8');
-  stampOld = buildStamp(oldSrc, false);
-} catch { /* no baseline */ }
+  const lbox = {};
+  vm.createContext(lbox);
+  vm.runInContext([
+    sliceFn(newSrc, 'cyrb53'), sliceFn(newSrc, 'aidFor'),
+    sliceConst(newSrc, 'STAMPABLE_TAGS'), sliceFn(newSrc, 'stampAidsLegacy'),
+  ].join('\n\n'), lbox);
+  stampOld = lbox.stampAidsLegacy;
+} catch { /* legacy not present */ }
 
 const aidSet = (html, fn) => fn(html).aids.map(a => `${a.tag}:${a.aid}`).sort();
 
@@ -132,6 +138,117 @@ t('IDEMPOTENT: re-stamping already-stamped HTML yields the same aids', () => {
   const twice = stampNew(once.html);
   assert(JSON.stringify(aidSet(html, stampNew)) === JSON.stringify(twice.aids.map(a => `${a.tag}:${a.aid}`).sort()),
     're-stamping changed aids (not idempotent)');
+});
+
+// ---- (3) measureAidDrift: the #24 dry-run measurement ----
+// Build a context with cyrb53/aidFor/STAMPABLE_TAGS + the new helpers + BOTH
+// stampAids and stampAidsLegacy + measureAidDrift, so we can assert the drift
+// report is accurate.
+const driftBox = {};
+vm.createContext(driftBox);
+// measureAidDrift folds the live anchor via snapshotAt, so include the fold
+// helper chain too. AGENT_STATUS_EMOJI is referenced by snapshotAt.
+driftBox.AGENT_STATUS_EMOJI = { applied: '✅', partial: '🟡', question: '❓' };
+function driftRegion(fromFn, toFn) {
+  const s = newSrc.indexOf(`function ${fromFn}(`);
+  const e0 = newSrc.indexOf(`function ${toFn}(`);
+  let i = newSrc.indexOf('{', e0), d = 0;
+  for (; i < newSrc.length; i++) { if (newSrc[i] === '{') d++; else if (newSrc[i] === '}') { d--; if (d === 0) { i++; break; } } }
+  return newSrc.slice(s, i);
+}
+vm.runInContext([
+  sliceFn(newSrc, 'cyrb53'),
+  sliceFn(newSrc, 'aidFor'),
+  sliceConst(newSrc, 'STAMPABLE_TAGS'),
+  sliceConst(newSrc, 'RAW_TEXT_TAGS'),
+  sliceFn(newSrc, 'attrAwareOpenTagEnd'),
+  sliceFn(newSrc, 'skipRawTextBodyAt'),
+  sliceFn(newSrc, 'stampAidsLegacy'),
+  sliceFn(newSrc, 'stampAids'),
+  sliceFn(newSrc, 'isFiniteVersion'),
+  driftRegion('legacyToEvents', 'compactComments'), // eventEid/backfill/ensure*/snapshotAt/…
+  sliceFn(newSrc, 'measureAidDrift'),
+].join('\n\n'), driftBox);
+const measureAidDrift = driftBox.measureAidDrift;
+
+t('DRY-RUN: normal HTML reports ZERO drift (legacy == new)', () => {
+  const html = '<body><h2>A</h2><figure><svg viewBox="0 0 1 1"></svg></figure><table><tr><td>x</td></tr></table></body>';
+  // a comment anchored to the figure's (legacy) aid
+  const legacyAids = driftBox.stampAidsLegacy(html).aids;
+  const figAid = legacyAids.find(a => a.tag === 'figure').aid;
+  const comments = [{ id: 'c1', anchor: { kind: 'element', aid: figAid } }];
+  const d = measureAidDrift(html, comments);
+  assert(d.changed === 0, `expected 0 changed aids on normal HTML, got ${d.changed}`);
+  assert(d.affectedComments === 0, `expected 0 affected, got ${d.affectedComments}`);
+});
+
+t('DRY-RUN: edge-case HTML (`>` in attr) flags the comment whose legacy aid vanishes', () => {
+  const html = '<body><h2>Chart</h2><figure><img src="x" alt="a > b"></figure></body>';
+  const imgAid = driftBox.stampAidsLegacy(html).aids.find(a => a.tag === 'img').aid;
+  // a stored comment anchored to the legacy (wrong) img aid — that aid is gone
+  // under the hardened parser, so it's at risk.
+  const comments = [{ id: 'c_affected', anchor: { kind: 'element', aid: imgAid } }];
+  const d = measureAidDrift(html, comments);
+  assert(d.changed >= 1, `expected >=1 vanished legacy aid, got ${d.changed}`);
+  assert(d.affectedComments === 1, `expected the 1 anchored comment flagged, got ${d.affectedComments}`);
+  assert(d.samples.some(s => s.id === 'c_affected' && s.lostAid === imgAid), 'affected comment/lostAid not in samples');
+});
+
+t('DRY-RUN: text-anchored comments are never counted (only element aids)', () => {
+  const html = '<body><figure><img src="x" alt="a > b"></figure></body>';
+  const comments = [{ id: 'c_text', anchor: { kind: 'text', text: 'whatever' } }];
+  const d = measureAidDrift(html, comments);
+  assert(d.affectedComments === 0, 'text anchors must not be counted');
+});
+
+t('DRY-RUN: set-membership is misalignment-proof (different element counts)', () => {
+  // Legacy mis-parses the first div (its `>`-in-attr breaks the opt-in match),
+  // so the two parsers emit different element SETS. A comment on the SECOND
+  // (unchanged) div must NOT be falsely flagged — its aid is in both sets.
+  const html = '<body><div title="a > b" class="tdoc-artifact">first</div>'
+    + '<div class="tdoc-artifact">second</div></body>';
+  const legacy = driftBox.stampAidsLegacy(html).aids;
+  const current = driftBox.stampAids(html).aids;
+  // find the SECOND div's aid as it exists in the legacy set (stable across both)
+  const stable = legacy.map(a => a.aid).filter(aid => current.some(c => c.aid === aid));
+  if (stable.length) {
+    const comments = [{ id: 'c_safe', anchor: { kind: 'element', aid: stable[0] } }];
+    const d = measureAidDrift(html, comments);
+    assert(d.affectedComments === 0, `comment on an aid present in BOTH parsers must not be flagged (got ${d.affectedComments})`);
+  } else { ok('  (no stable aid in this corpus case — skipped)'); }
+});
+
+t('DRY-RUN: is strictly READ-ONLY — does not backfill eids on the input list', () => {
+  // snapshotAt→ensureEventLog backfills eids in place; the measurement must fold
+  // a copy so it never mutates the caller's comments (which the upload handler
+  // diffs before/after and would otherwise persist).
+  const html = '<body><figure><img src="x" alt="a > b"></figure></body>';
+  const c = {
+    id: 'c_noeid',
+    // event with NO eid — ensureEventLog would backfill one if we folded the real obj
+    events: [{ kind: 'created', at_version: 1, at: '2026-01-01', anchor: { kind: 'element', aid: 'whatever' } }],
+  };
+  const snapshot = JSON.stringify(c);
+  measureAidDrift(html, [c]);
+  assert(JSON.stringify(c) === snapshot, 'measureAidDrift MUTATED the input comment (eid backfill leaked through)');
+  assert(!c.events[0].eid, 'eid was backfilled on the caller object — not read-only');
+});
+
+t('DRY-RUN: uses the LIVE folded anchor, not the stale created-event anchor', () => {
+  // A comment created on a legacy aid but later re-anchored (anchor_changed) to
+  // a still-valid aid must NOT be counted — its live target is fine.
+  const html = '<body><h2>Chart</h2><figure><img src="x" alt="a > b"></figure></body>';
+  const stillValid = driftBox.stampAids(html).aids.find(a => a.tag === 'figure').aid;
+  const goneAid = driftBox.stampAidsLegacy(html).aids.find(a => a.tag === 'img').aid;
+  const c = {
+    id: 'c_reanchored',
+    events: [
+      { kind: 'created', at_version: 1, at: '2026-01-01', anchor: { kind: 'element', aid: goneAid } },
+      { kind: 'anchor_changed', at_version: 2, at: '2026-01-02', anchor: { kind: 'element', aid: stillValid } },
+    ],
+  };
+  const d = measureAidDrift(html, [c]);
+  assert(d.affectedComments === 0, 'a comment re-anchored to a valid aid must not be flagged by its stale created aid');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

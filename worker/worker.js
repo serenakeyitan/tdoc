@@ -205,6 +205,158 @@ function skipRawTextBodyAt(html, openTag, attrs, openEnd) {
   return m ? openEnd + m.index + m[0].length : html.length;
 }
 
+// --- #24 dry-run instrumentation -------------------------------------------
+// The hardened stampAids() above fixes real regex bugs (`>` in an attribute,
+// `</tag>` inside <script>/<style>). For ORDINARY HTML it produces aids
+// identical to the legacy parser; it differs ONLY on the edge-case HTML the
+// legacy parser mis-parsed (those inputs are valid HTML but rare). Because `aid`
+// is the anchor key for stored comments, we MEASURE the blast radius before
+// assuming it's safe: compute the aid SETS with both parsers and report how many
+// live comments anchor to an aid the legacy parser produced but the hardened one
+// no longer does (set membership — never an index-paired old→new map, which
+// could mis-pair when the parsers diverge). This logs only — it never mutates
+// (it folds deep copies). (Design: docs/DESIGN-aid-migration.md. Empirically 0
+// across current docs.)
+function stampAidsLegacy(rawHtml) {
+  const headRe = /<h([1-3])\b[^>]*>([\s\S]*?)<\/h\1>/gi;
+  const headings = [];
+  let hmatch;
+  while ((hmatch = headRe.exec(rawHtml))) {
+    headings.push({ end: hmatch.index + hmatch[0].length,
+      text: hmatch[2].replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim() });
+  }
+  function nearestHeadingAt(idx) {
+    let best = null;
+    // Use <= so a heading whose close tag ends exactly at the next
+    // element's open (no whitespace between) is still "before" it.
+    for (const h of headings) { if (h.end <= idx) best = h.text; else break; }
+    return best;
+  }
+  // Find every open tag of every stampable kind in document order.
+  // For non-void tags, find its matching close (same-tag depth count).
+  // Collect [openStart, openEnd, closeEnd, tag, attrs, innerHtml] per element.
+  const elements = [];
+  const seenOpens = new Set();   // dedupe across passes (tag pass + opt-in pass)
+  function harvest(openStart, openEnd, tagLower, attrs) {
+    if (seenOpens.has(openStart)) return;
+    const isVoid = /^(img|iframe)$/i.test(tagLower) || /\/\s*$/.test(attrs);
+    let closeEnd = openEnd, innerHtml = '';
+    if (!isVoid) {
+      const closeRe = new RegExp(`</${tagLower}\\s*>|<${tagLower}\\b[^>]*>`, 'gi');
+      closeRe.lastIndex = openEnd;
+      let depth = 1, c;
+      while ((c = closeRe.exec(rawHtml))) {
+        if (c[0][1] === '/') { depth--; if (depth === 0) { closeEnd = c.index + c[0].length; break; } }
+        else depth++;
+      }
+      innerHtml = rawHtml.slice(openEnd, closeEnd - (`</${tagLower}>`.length));
+    }
+    seenOpens.add(openStart);
+    elements.push({ openStart, openEnd, closeEnd, tag: tagLower, attrs, innerHtml, isVoid });
+  }
+  // Pass 1: every known stampable tag.
+  for (const tag of STAMPABLE_TAGS) {
+    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi');
+    let m;
+    while ((m = openRe.exec(rawHtml))) harvest(m.index, m.index + m[0].length, tag, m[1] || '');
+  }
+  // Pass 2: opt-in markers (any tag with data-tdoc-artifact or class
+  // containing `tdoc-artifact`). Authors mark composed cards/widgets this
+  // way so they're commentable as a unit.
+  const optInRe = /<([a-z][\w-]*)\b([^>]*\b(?:data-tdoc-artifact\b|class\s*=\s*"[^"]*\btdoc-artifact\b[^"]*")[^>]*)>/gi;
+  let om;
+  while ((om = optInRe.exec(rawHtml))) {
+    const tagLower = om[1].toLowerCase();
+    harvest(om.index, om.index + om[0].length, tagLower, om[2] || '');
+  }
+  // Compute aid per element (uses cleaned attrs + inner content with any
+  // existing data-tdoc-aid stripped, so re-stamping is idempotent).
+  const aids = [];
+  for (const e of elements) {
+    const cleanedAttrs = e.attrs.replace(/\s+data-tdoc-aid\s*=\s*"[^"]*"/gi, '');
+    // For nested commentables we hash the OUTER's content even though it
+    // contains an inner commentable — that's correct, "outer artifact" is
+    // a different identity than "inner artifact". We just strip any
+    // data-tdoc-aid attributes from the inner before hashing so the
+    // hash is stable across re-stampings.
+    const cleanedInner = e.innerHtml.replace(/\sdata-tdoc-aid\s*=\s*"[^"]*"/gi, '');
+    e._cleanedAttrs = cleanedAttrs;
+    e._aid = aidFor(e.tag, cleanedInner, cleanedAttrs);
+    aids.push({
+      aid: e._aid, tag: e.tag,
+      head: e.innerHtml.slice(0, 80),
+      heading: nearestHeadingAt(e.openStart),
+    });
+  }
+  // Apply stamps in REVERSE order so earlier offsets stay valid as we mutate.
+  elements.sort((a, b) => b.openStart - a.openStart);
+  let out = rawHtml;
+  for (const e of elements) {
+    const stampedOpen = e.isVoid
+      ? `<${e.tag}${e._cleanedAttrs} data-tdoc-aid="${e._aid}"${/\/\s*$/.test(e.attrs) ? '/' : ''}>`
+      : `<${e.tag}${e._cleanedAttrs} data-tdoc-aid="${e._aid}">`;
+    out = out.slice(0, e.openStart) + stampedOpen + out.slice(e.openEnd);
+  }
+  return { html: out, aids };
+}
+
+// Returns { changed, affectedComments, samples } describing aid drift between
+// the legacy and current parser for this HTML, scoped to comments whose LIVE
+// anchor target disappears under the hardened parser. Pure measurement; no
+// mutation.
+//
+// Pairing-free by design: we do NOT try to build an old→new aid map by index
+// (the two parsers can emit different element counts/order on exactly the edge-
+// case HTML this measures, which would fabricate wrong mappings). Instead we use
+// SET MEMBERSHIP, which can't mis-pair:
+//   - legacySet = aids the legacy parser produced for this HTML (what stored
+//     comments were anchored against).
+//   - currentSet = aids the hardened parser produces now.
+//   - A comment is "at risk" iff its live element aid is in legacySet but NOT in
+//     currentSet — i.e. the fix made its anchor target's aid vanish, so reconcile
+//     will have to rebind it. (If the aid is still present, the fix didn't move
+//     that comment's target — safe.)
+function measureAidDrift(rawHtml, comments) {
+  let legacy, current;
+  try { legacy = stampAidsLegacy(rawHtml).aids; } catch { return { changed: 0, affectedComments: 0, samples: [] }; }
+  try { current = stampAids(rawHtml).aids; } catch { return { changed: 0, affectedComments: 0, samples: [] }; }
+  const legacySet = new Set(legacy.map(a => a.aid));
+  const currentSet = new Set(current.map(a => a.aid));
+  // count of legacy aids that no longer exist under the hardened parser
+  let changed = 0;
+  for (const aid of legacySet) if (!currentSet.has(aid)) changed++;
+
+  let affected = 0; const samples = [];
+  for (const c of (Array.isArray(comments) ? comments : [])) {
+    // Use the LIVE folded anchor (after replaying anchor_changed events), not the
+    // raw created-event anchor — a comment already re-anchored must not be
+    // counted against its stale original aid.
+    //
+    // CRITICAL: snapshotAt → ensureEventLog backfills eids IN PLACE, so we fold a
+    // DEEP COPY. This keeps measureAidDrift strictly read-only — it must never
+    // mutate the caller's list (the upload handler diffs before/after and would
+    // otherwise persist an incidental eid-backfill from this log-only check).
+    let anchor = null;
+    try {
+      if (Array.isArray(c && c.events)) {
+        const copy = JSON.parse(JSON.stringify(c));
+        anchor = snapshotAt(copy, Infinity)?.anchor || null;
+      } else {
+        anchor = c && c.anchor;
+      }
+    } catch { anchor = c && c.anchor; }
+    const aid = anchor && anchor.kind === 'element' ? (anchor.aid || null) : null;
+    // At risk iff its target existed under legacy but is gone under the fix.
+    if (aid && legacySet.has(aid) && !currentSet.has(aid)) {
+      affected++;
+      if (samples.length < 5) samples.push({ id: c.id, lostAid: aid });
+    }
+  }
+  return { changed, affectedComments: affected, samples };
+}
+// ---------------------------------------------------------------------------
+
+
 // Walk the HTML and stamp `data-tdoc-aid` on every commentable element.
 // Returns { html: <stamped>, aids: [{aid, tag, head, heading}] }.
 //
@@ -1511,6 +1663,22 @@ export default {
         const raw = await env.META.get(cKey);
         const list = raw ? JSON.parse(raw) : [];
         const before = JSON.stringify(list);
+
+        // #24 dry-run: measure (don't mutate) how many live comments anchor to
+        // an aid that the hardened parser changes vs the legacy parser. If this
+        // is ever > 0 on a real doc, that doc needs the aid migration from
+        // docs/DESIGN-aid-migration.md before its anchors are safe. Visible via
+        // `wrangler tail`. Empirically 0 across current docs.
+        try {
+          const drift = measureAidDrift(doc, list);
+          if (drift.affectedComments > 0) {
+            console.warn(`[aid-drift] slug=${slug} v=${version} changedAids=${drift.changed} affectedComments=${drift.affectedComments} samples=${JSON.stringify(drift.samples)} — these anchors will rebind via reconcile; see docs/DESIGN-aid-migration.md`);
+          } else {
+            console.log(`[aid-drift] slug=${slug} v=${version} changedAids=${drift.changed} affectedComments=0 (safe)`);
+          }
+        } catch (e) {
+          console.error('[aid-drift] measurement failed (non-fatal):', e.message);
+        }
 
         // Merge locally-authored comments (sent by tdoc-publish) NON-
         // DESTRUCTIVELY: add a local comment only if its id is not already on
