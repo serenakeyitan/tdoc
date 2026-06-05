@@ -7,9 +7,9 @@
 //   - footer (.tdoc-footer) present + within viewport.
 // Exit non-zero on any failure.
 
-const { chromium } = require('playwright');
+const { requirePlaywrightOrSkip, resolveTarget } = require('./helpers/fixture-server');
+const { chromium } = requirePlaywrightOrSkip('dimensions-audit.js');
 
-const URL = process.env.TDOC_TEST_URL || 'https://tdoc-serenatan.serenatan.workers.dev/d/conway-life/v/2';
 const START = +(process.env.AUDIT_START || 320);
 const END = +(process.env.AUDIT_END || 1600);
 const STEP = +(process.env.AUDIT_STEP || 50);
@@ -17,6 +17,8 @@ const COLOR_SCHEME = process.env.AUDIT_COLOR_SCHEME || 'light';
 const REQUIRE_FOOTER = process.env.AUDIT_REQUIRE_FOOTER !== '0';
 
 (async () => {
+  const target = await resolveTarget();
+  const URL = target.url;
   const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({
     viewport: { width: 1024, height: 800 },
@@ -158,5 +160,6 @@ const REQUIRE_FOOTER = process.env.AUDIT_REQUIRE_FOOTER !== '0';
     console.log(`all ${summary.length} widths passed`);
   }
   await browser.close();
+  await target.stop();
   process.exit(failures.length ? 1 : 0);
 })();

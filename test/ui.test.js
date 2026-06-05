@@ -1,17 +1,35 @@
-// Playwright UI test for tdoc published doc.
+// Playwright UI test for the tdoc overlay.
 // Run with: node test/ui.test.js
-// Tests against the live worker — no local server needed.
+//
+// By default this boots the LOCAL server (server/server.js) against the
+// committed fixture in test/fixtures/tdocs and tests THAT — so it exercises the
+// working-tree overlay, runs offline, and actually gates pre-push. Point it at a
+// live deploy with TDOC_TEST_URL=... to test a shipped build instead.
+// Requires playwright; without it the suite skips loudly (never silently passes).
 
-const { chromium } = require('playwright');
+const { requirePlaywrightOrSkip, resolveTarget } = require('./helpers/fixture-server');
+const { chromium } = requirePlaywrightOrSkip('ui.test.js');
+const { isPublishedTarget } = require('./helpers/fixture-server');
 
-const URL = process.env.TDOC_TEST_URL || 'https://tdoc-serenatan.serenatan.workers.dev/d/conway-life/v/2';
-
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skipped = 0;
 function ok(name) { console.log(`  ✓ ${name}`); pass++; }
 function bad(name, err) { console.log(`  ✗ ${name}\n    ${err}`); fail++; }
 async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name, e.message); } }
+// Published-only assertion: the UI it checks (Share / fork / sign-in / auth
+// reactions) exists only in the worker's `mode:'published'`. Against the local
+// fixture server it skips LOUDLY (counted, never a silent pass); set
+// TDOC_TEST_URL=<live worker> to actually run it.
+async function tPub(name, fn) {
+  if (!isPublishedTarget()) {
+    console.log(`  ⊘ ${name} — SKIP (published-only; set TDOC_TEST_URL to run)`);
+    skipped++; return;
+  }
+  await t(name, fn);
+}
 
 (async () => {
+  const target = await resolveTarget();
+  const URL = target.url;
   console.log(`testing ${URL}\n`);
   const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({
@@ -191,6 +209,20 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     await page.mouse.move(target.sx, target.sy);
     await page.mouse.down();
     await page.mouse.move(target.ex, target.ey, { steps: 12 });
+    // Headless Chromium's synthetic drag doesn't reliably create a text
+    // Selection, which the mouseup handler needs to open the selection popup.
+    // Establish a real selection over the dragged text so the code path under
+    // test (drag-without-artifact → selection popup) actually runs.
+    await page.evaluate(() => {
+      const el = [...document.querySelectorAll('.wrap p, .wrap li, .wrap h1, .wrap h2, .wrap h3')]
+        .find(e => e.textContent.trim().length > 30);
+      if (!el) return;
+      const node = [...el.childNodes].find(n => n.nodeType === 3 && n.textContent.trim().length > 10) || el.firstChild;
+      const r = document.createRange();
+      r.setStart(node, 0);
+      r.setEnd(node, Math.min(20, node.textContent.length));
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    });
     await page.mouse.up();
     await page.waitForSelector('.tdoc-popup', { timeout: 2000 });
     await page.click('.tdoc-popup .head .x').catch(() => {});
@@ -228,12 +260,23 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     if (author) await author.click();
     else await card.click({ position: { x: 30, y: 10 } });
     await page.waitForTimeout(150);
-    const state = await page.evaluate(() => ({
-      activeCards: document.querySelectorAll('.tdoc-margin-comment.active').length,
-      activeMarks: document.querySelectorAll('.tdoc-anchor-mark.active, .tdoc-element-outline.active').length,
-    }));
+    const state = await page.evaluate(() => {
+      // Text anchors highlight via the CSS Custom Highlight API
+      // (CSS.highlights 'tdoc-anchor-active'), NOT .tdoc-anchor-mark DOM nodes
+      // (those exist only on the legacy/element-outline fallback). Count BOTH so
+      // the assertion is correct on modern + fallback browsers.
+      const activeHighlight = (window.CSS && CSS.highlights && CSS.highlights.has('tdoc-anchor-active'))
+        ? (CSS.highlights.get('tdoc-anchor-active').size || 0) : 0;
+      const activeFallback = document.querySelectorAll(
+        '.tdoc-anchor-mark.active, .tdoc-element-outline.active'
+      ).length;
+      return {
+        activeCards: document.querySelectorAll('.tdoc-margin-comment.active').length,
+        activeAnchors: activeHighlight + activeFallback,
+      };
+    });
     if (state.activeCards !== 1) throw new Error(`expected 1 active card, got ${state.activeCards}`);
-    if (state.activeMarks < 1) throw new Error(`expected anchor to be active, got ${state.activeMarks}`);
+    if (state.activeAnchors < 1) throw new Error(`expected anchor to be active (highlight or mark), got ${state.activeAnchors}`);
   });
 
   await t('Click on a comment-anchored text highlight activates the matching card', async () => {
@@ -264,7 +307,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     if (activeCount !== 0) throw new Error(`expected 0 active after outside-click, got ${activeCount}`);
   });
 
-  await t('Sign-in button visible (anon view)', async () => {
+  await tPub('Sign-in button visible (anon view)', async () => {
     const btn = await page.$('#tdoc-signin');
     if (!btn) throw new Error('no sign-in button; expected on published anon view');
   });
@@ -310,7 +353,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     if (stillOpen) throw new Error('replies did not collapse on second click');
   });
 
-  await t('Clicking + React on anon view triggers sign-in (no picker)', async () => {
+  await tPub('Clicking + React on anon view triggers sign-in (no picker)', async () => {
     // Anon: should NOT open the emoji picker — should redirect to sign-in modal.
     await page.click('.tdoc-react-add');
     // Modal appears after the device/start network round-trip (~1-2s).
@@ -326,14 +369,14 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
   });
 
   // ----- Feature: Share button on published view -----
-  await t('Share button visible on published view (left of Copy)', async () => {
+  await tPub('Share button visible on published view (left of Copy)', async () => {
     const share = await page.$('#tdoc-share-btn');
     if (!share) throw new Error('no #tdoc-share-btn on published doc');
     const text = await share.textContent();
     if (!text.includes('Share')) throw new Error(`label was "${text}"`);
   });
 
-  await t('Click Share opens modal with URL + Copy button', async () => {
+  await tPub('Click Share opens modal with URL + Copy button', async () => {
     await page.click('#tdoc-share-btn');
     await page.waitForSelector('#tdoc-aux-modal', { timeout: 2000 });
     const url = await page.$eval('#tdoc-share-url', el => el.textContent.trim());
@@ -349,7 +392,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     if (!unpubText.includes('/tdoc unpublish')) throw new Error(`unpublish text was "${unpubText}"`);
   });
 
-  await t('Share modal closes', async () => {
+  await tPub('Share modal closes', async () => {
     await page.click('#tdoc-share-close');
     await page.waitForTimeout(150);
     const m = await page.$('#tdoc-aux-modal');
@@ -357,7 +400,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
   });
 
   // ----- Feature: Fork mode renderable URL -----
-  await t('Fork URL loads in fork mode (read-only, comments mirrored)', async () => {
+  await tPub('Fork URL loads in fork mode (read-only, comments mirrored)', async () => {
     const forkPage = await ctx.newPage();
     const u = URL.replace(/\/?$/, '') + '/fork';
     await forkPage.goto(u, { waitUntil: 'networkidle' });
@@ -380,6 +423,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
   });
 
   await browser.close();
-  console.log(`\n${pass} passed, ${fail} failed.`);
+  await target.stop();
+  console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped (published-only)` : ''}.`);
   process.exit(fail ? 1 : 0);
 })();

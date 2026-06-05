@@ -10,9 +10,9 @@
 //  - Bottom drawer toggles open when the FAB is tapped (mobile/tablet only)
 //  - Sign-in button still reachable
 
-const { chromium } = require('playwright');
-
-const URL = process.env.TDOC_TEST_URL || 'https://tdoc-serenatan.serenatan.workers.dev/d/conway-life/v/2';
+const { requirePlaywrightOrSkip, resolveTarget } = require('./helpers/fixture-server');
+const { chromium } = requirePlaywrightOrSkip('responsive.test.js');
+// URL resolved at runtime: local fixture by default, TDOC_TEST_URL to override.
 
 // Note: with v0.1.3's asymmetric-shrink layout, "narrow mode" (drawer + More
 // menu) is driven by the article's actual width, not viewport width. The article
@@ -27,11 +27,21 @@ const viewports = [
 ];
 
 let pass = 0, fail = 0;
+let skipped = 0;
+const { isPublishedTarget } = require('./helpers/fixture-server');
 function ok(n) { console.log(`  ✓ ${n}`); pass++; }
 function bad(n, e) { console.log(`  ✗ ${n}\n    ${e.message || e}`); fail++; }
 async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name, e); } }
+// Published-only chrome (Fork / All-docs / sign-in / identity chip) exists only
+// in the worker's published mode; skip loudly against the local fixture.
+async function tPub(name, fn) {
+  if (!isPublishedTarget()) { console.log(`  ⊘ ${name} — SKIP (published-only)`); skipped++; return; }
+  await t(name, fn);
+}
 
 (async () => {
+  const target = await resolveTarget();
+  const URL = target.url;
   console.log(`testing ${URL}\n`);
   const browser = await chromium.launch({ headless: true });
 
@@ -72,7 +82,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
       if (visible !== v.expectMore) throw new Error(`expected More visible=${v.expectMore}, got ${visible}`);
     });
 
-    await t('Fork + All-docs: visible only on desktop', async () => {
+    await tPub('Fork + All-docs: visible only on desktop', async () => {
       const fork = await page.evaluate(() => {
         const el = document.querySelector('#tdoc-fork-btn');
         return el ? (el.offsetWidth > 0 && el.offsetHeight > 0) : false;
@@ -151,7 +161,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
       });
     }
 
-    await t('Sign-in button or identity chip is visible', async () => {
+    await tPub('Sign-in button or identity chip is visible', async () => {
       const present = await page.evaluate(() => {
         const slot = document.querySelector('#tdoc-identity-slot');
         return !!(slot && slot.children.length > 0);
@@ -196,7 +206,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
         if (!open) throw new Error('More menu did not open via click()');
       });
     } else {
-      await t('Fork + All-docs buttons clickable', async () => {
+      await tPub('Fork + All-docs buttons clickable', async () => {
         const ok = await page.evaluate(() => {
           const fork = document.querySelector('#tdoc-fork-btn');
           const home = document.querySelector('#tdoc-home-btn');
@@ -213,6 +223,7 @@ async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name,
     console.log();
   }
   await browser.close();
+  await target.stop();
   console.log(`${pass} passed, ${fail} failed.`);
   process.exit(fail ? 1 : 0);
 })();
