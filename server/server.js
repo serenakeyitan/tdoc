@@ -26,12 +26,46 @@ function readJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; }
 }
 function writeJson(p, obj) { fs.writeFileSync(p, JSON.stringify(obj, null, 2)); }
+// Cap request bodies so a hostile/buggy client can't OOM the local server.
+const MAX_BODY_BYTES = 1 << 20; // 1 MiB — comments are small
 function readBody(req) {
-  return new Promise((resolve) => {
-    let b = '';
-    req.on('data', d => b += d);
+  return new Promise((resolve, reject) => {
+    let b = '', size = 0;
+    req.on('data', d => {
+      size += d.length;
+      if (size > MAX_BODY_BYTES) { reject(new Error('body too large')); req.destroy(); return; }
+      b += d;
+    });
     req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } });
+    req.on('error', reject);
   });
+}
+
+// Single source of truth for slug validation. Every route that turns a slug
+// into a filesystem path MUST run it through here first — otherwise
+// `slug=../../etc` escapes ROOT via path.join (confirmed path-traversal on the
+// comment routes). Returns the slug if safe, else null.
+function safeSlug(slug) {
+  return (typeof slug === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(slug)) ? slug : null;
+}
+
+// Guard for state-mutating local requests. The local server has no auth (by
+// design — it's localhost-only), so a drive-by web page must not be able to
+// drive it via CSRF. A cross-origin page can only send a CORS-"simple" POST
+// (text/plain, no custom headers) without a preflight; requiring JSON
+// content-type defeats that, and rejecting non-local Origins closes the rest.
+// Returns true if the request is allowed to mutate.
+function isLocalMutation(req) {
+  const ct = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (ct !== 'application/json') return false;
+  const origin = req.headers['origin'];
+  if (origin) {
+    try {
+      const h = new URL(origin).hostname;
+      if (h !== 'localhost' && h !== '127.0.0.1' && h !== '::1') return false;
+    } catch { return false; }
+  }
+  return true;
 }
 
 // Escape `</script>` and HTML comment terminators so a malicious or stray value
@@ -117,6 +151,7 @@ ${slugs.length === 0 ? '<p class="empty">No docs yet. Try <code>/tdoc new &lt;pr
 }
 
 const server = http.createServer(async (req, res) => {
+ try {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
@@ -126,7 +161,9 @@ const server = http.createServer(async (req, res) => {
 
   const docMatch = p.match(/^\/d\/([^/]+)\/v\/(\d+)\/?$/);
   if (docMatch) {
-    const [, slug, vStr] = docMatch;
+    const [, rawSlug, vStr] = docMatch;
+    const slug = safeSlug(rawSlug);
+    if (!slug) return send(res, 400, 'invalid slug');
     const file = path.join(ROOT, slug, `v${vStr}`, 'index.html');
     if (!fs.existsSync(file)) return send(res, 404, `Not found: ${slug} v${vStr}`);
     const html = fs.readFileSync(file, 'utf8');
@@ -135,15 +172,17 @@ const server = http.createServer(async (req, res) => {
 
   // --- COMMENTS (anonymous) ---
   if (p === '/api/comments' && req.method === 'GET') {
-    const slug = url.searchParams.get('slug');
-    if (!slug) return json(res, 400, { error: 'slug required' });
+    const slug = safeSlug(url.searchParams.get('slug'));
+    if (!slug) return json(res, 400, { error: 'invalid or missing slug' });
     return json(res, 200, readJson(path.join(ROOT, slug, 'comments.json'), []));
   }
 
   if (p === '/api/comments' && req.method === 'POST') {
+    if (!isLocalMutation(req)) return json(res, 403, { error: 'forbidden' });
     const body = await readBody(req);
-    const { slug, version, anchor, text, parent_id } = body;
-    if (!slug || !text) return json(res, 400, { error: 'slug and text required' });
+    const slug = safeSlug(body.slug);
+    const { version, anchor, text, parent_id } = body;
+    if (!slug || !text) return json(res, 400, { error: 'invalid slug or missing text' });
     const file = path.join(ROOT, slug, 'comments.json');
     const comments = readJson(file, []);
     const created = new Date().toISOString();
@@ -182,9 +221,11 @@ const server = http.createServer(async (req, res) => {
   // The agent always clears its previous emoji on this comment first, so a
   // stale "applied" emoji can't outlive a later "question" outcome.
   if (p === '/api/agent/reply' && req.method === 'POST') {
+    if (!isLocalMutation(req)) return json(res, 403, { error: 'forbidden' });
     const body = await readBody(req);
-    const { slug, parent_id, text, status: agentStatus, applied_in } = body;
-    if (!slug || !parent_id || !text) return json(res, 400, { error: 'slug, parent_id, text required' });
+    const slug = safeSlug(body.slug);
+    const { parent_id, text, status: agentStatus, applied_in } = body;
+    if (!slug || !parent_id || !text) return json(res, 400, { error: 'invalid slug or missing parent_id/text' });
     const file = path.join(ROOT, slug, 'comments.json');
     const all = readJson(file, []);
     const parent = all.find(c => c.id === parent_id);
@@ -217,9 +258,11 @@ const server = http.createServer(async (req, res) => {
   // re-anchor means the comment now points at different text, so any old
   // agent verdict is stale.
   if (p === '/api/comments' && req.method === 'PATCH') {
+    if (!isLocalMutation(req)) return json(res, 403, { error: 'forbidden' });
     const body = await readBody(req);
-    const { slug, id, anchor } = body;
-    if (!slug || !id || !anchor) return json(res, 400, { error: 'slug, id, anchor required' });
+    const slug = safeSlug(body.slug);
+    const { id, anchor } = body;
+    if (!slug || !id || !anchor) return json(res, 400, { error: 'invalid slug or missing id/anchor' });
     const file = path.join(ROOT, slug, 'comments.json');
     const all = readJson(file, []);
     const target = all.find(c => c.id === id);
@@ -233,9 +276,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (p === '/api/comments' && req.method === 'DELETE') {
-    const slug = url.searchParams.get('slug');
+    // DELETE carries no body, so the JSON content-type check doesn't apply;
+    // a cross-origin DELETE is not a CORS-simple request, but reject non-local
+    // Origins explicitly for defense in depth.
+    const dOrigin = req.headers['origin'];
+    if (dOrigin) {
+      try { const h = new URL(dOrigin).hostname; if (!['localhost','127.0.0.1','::1'].includes(h)) return json(res, 403, { error: 'forbidden' }); }
+      catch { return json(res, 403, { error: 'forbidden' }); }
+    }
+    const slug = safeSlug(url.searchParams.get('slug'));
     const id = url.searchParams.get('id');
-    if (!slug || !id) return json(res, 400, { error: 'slug and id required' });
+    if (!slug || !id) return json(res, 400, { error: 'invalid slug or missing id' });
     const file = path.join(ROOT, slug, 'comments.json');
     const all = readJson(file, []);
     const top = all.find(c => c.id === id);
@@ -256,9 +307,11 @@ const server = http.createServer(async (req, res) => {
 
   // Reactions: anonymous on local, keyed by an "anon" pseudo-user so toggling works
   if (p === '/api/reactions' && req.method === 'POST') {
+    if (!isLocalMutation(req)) return json(res, 403, { error: 'forbidden' });
     const body = await readBody(req);
-    const { slug, comment_id, emoji } = body;
-    if (!slug || !comment_id || !emoji) return json(res, 400, { error: 'slug, comment_id, emoji required' });
+    const slug = safeSlug(body.slug);
+    const { comment_id, emoji } = body;
+    if (!slug || !comment_id || !emoji) return json(res, 400, { error: 'invalid slug or missing comment_id/emoji' });
     if (emoji.length === 0 || emoji.length > 8) return json(res, 400, { error: 'invalid_emoji' });
     const file = path.join(ROOT, slug, 'comments.json');
     const all = readJson(file, []);
@@ -291,11 +344,10 @@ const server = http.createServer(async (req, res) => {
   // Honor TDOC_DRY_PUBLISH=1 for tests — echoes "would publish <slug>" and
   // returns a fake URL without invoking wrangler.
   if (p === '/api/publish' && req.method === 'POST') {
+    if (!isLocalMutation(req)) return json(res, 403, { error: 'forbidden' });
     const body = await readBody(req);
-    const slug = body.slug;
-    if (!slug || !/^[a-zA-Z0-9_-]{1,64}$/.test(slug)) {
-      return json(res, 400, { error: 'invalid slug' });
-    }
+    const slug = safeSlug(body.slug);
+    if (!slug) return json(res, 400, { error: 'invalid slug' });
     if (process.env.TDOC_DRY_PUBLISH === '1') {
       return json(res, 200, {
         ok: true,
@@ -306,26 +358,45 @@ const server = http.createServer(async (req, res) => {
     }
     const bin = path.join(__dirname, '..', 'bin', 'tdoc-publish');
     if (!fs.existsSync(bin)) return json(res, 500, { error: 'tdoc-publish script not found' });
+    // Spawn hardening: an `error` listener (so an EACCES doesn't crash the whole
+    // server with an unhandled 'error' event), a hard timeout (SIGTERM→SIGKILL)
+    // so a hung wrangler/curl can't leave the HTTP response pending forever, and
+    // a bounded output buffer so runaway child output can't OOM us. wrangler
+    // legitimately needs the inherited env (CLOUDFLARE_* creds), so we keep it
+    // but this endpoint is now origin/CSRF-gated above.
     const proc = spawn(bin, [slug], { env: process.env });
-    let out = '', err = '';
-    proc.stdout.on('data', d => out += d);
-    proc.stderr.on('data', d => err += d);
+    let out = '', err = '', settled = false, killed = false;
+    const CAP = 256 * 1024; // 256 KiB of captured output is plenty
+    const append = (buf, d) => (buf.length < CAP ? buf + d : buf);
+    const settle = (status, obj) => { if (settled) return; settled = true; clearTimeout(timer); json(res, status, obj); };
+    const timer = setTimeout(() => { killed = true; proc.kill('SIGTERM'); setTimeout(() => proc.kill('SIGKILL'), 3000); }, 180000);
+    proc.on('error', (e) => settle(500, { error: 'publish_spawn_failed', detail: String(e && e.message || e) }));
+    proc.stdout.on('data', d => { out = append(out, d); });
+    proc.stderr.on('data', d => { err = append(err, d); });
     proc.on('close', (code) => {
-      if (code !== 0) {
-        return json(res, 500, { error: 'publish_failed', code, stdout: out, stderr: err });
-      }
+      if (killed) return settle(504, { error: 'publish_timeout', stdout: out, stderr: err });
+      if (code !== 0) return settle(500, { error: 'publish_failed', code, stdout: out, stderr: err });
       // tdoc-publish ends with "Published: <URL>"
       const m = out.match(/Published:\s*(https?:\/\/\S+)/);
-      const url = m ? m[1] : null;
-      return json(res, 200, { ok: true, url, stdout: out });
+      settle(200, { ok: true, url: m ? m[1] : null, stdout: out });
     });
     return;
   }
 
   send(res, 404, 'Not found');
+ } catch (e) {
+  // Body too large, malformed request, or unexpected throw — respond cleanly
+  // instead of crashing the server with an unhandled rejection.
+  const tooBig = e && /too large/i.test(String(e.message));
+  if (!res.headersSent) json(res, tooBig ? 413 : 500, { error: tooBig ? 'payload_too_large' : 'internal_error' });
+ }
 });
 
-server.listen(PORT, () => {
+// Bind to loopback only. The local server has no auth by design; binding all
+// interfaces (the Node default when host is omitted) would expose the
+// unauthenticated comment + publish API to the local network.
+const HOST = process.env.TDOC_HOST || '127.0.0.1';
+server.listen(PORT, HOST, () => {
   console.log(`tdoc server: http://localhost:${PORT}  (root: ${ROOT})`);
-  console.log('mode: local (anonymous, no auth)');
+  console.log(`mode: local (anonymous, no auth) — bound to ${HOST}`);
 });

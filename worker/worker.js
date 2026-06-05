@@ -64,6 +64,18 @@ function isOwnerSession(env, session) {
   if (!owner || !session || !session.login) return false;
   return session.login.toLowerCase() === owner;
 }
+// Authorization for mutating a comment/reply: DENY by default. Allow only the
+// record's author or the doc owner. Critically, a record with a null/absent
+// author (legacy pre-event-log records produced by ensureEventLog) is NOT
+// mutable by an arbitrary signed-in user — the previous `if (author && ...)`
+// pattern short-circuited to "allow" on null, letting any GitHub session
+// delete/re-anchor authorless legacy comments. Same logic for the three
+// mutation sites, in one place.
+function canMutate(record, session, env) {
+  if (isOwnerSession(env, session)) return true;
+  const who = record && record.author && record.author.login;
+  return !!(who && session && session.login && who === session.login);
+}
 function rand(n) {
   const a = new Uint8Array(n);
   crypto.getRandomValues(a);
@@ -74,6 +86,22 @@ function rand(n) {
 // inside the JSON payload can't break out of the surrounding <script> block.
 function safeJsonForScript(obj) {
   return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
+}
+
+// Make an untrusted string safe to interpolate inside an HTML comment (or an
+// HTML-comment-delimited marker). Comment text and author logins are
+// attacker-controllable (any signed-in user can post a comment), so without
+// this a `-->` in a comment would break out of the comment context and inject
+// live markup into the fork/export document served on the worker origin.
+//
+// HTML comments do NOT decode entities, so we can't entity-escape — we must
+// neutralize the byte sequences that open/close a comment. We break the `--`
+// run (the only thing that can form `-->` or start `<!--`) with a backslash,
+// which is unambiguous to a human/agent reader and cannot terminate the
+// comment. Applied once, at every interpolation point — escaping as one layer,
+// not a per-spot patch.
+function forHtmlComment(s) {
+  return String(s == null ? '' : s).replace(/--/g, '-\\-');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -821,8 +849,8 @@ export default {
       };
       let banner = `<!--
   ===== tdoc fork export =====
-  slug: ${slug}
-  version: ${vStr}
+  slug: ${forHtmlComment(slug)}
+  version: ${forHtmlComment(vStr)}
   exported: ${new Date().toISOString()}
 
   ## How to use this file
@@ -837,15 +865,15 @@ export default {
 `;
       for (let i = 0; i < openComments.length; i++) {
         const c = openComments[i];
-        const who = c.author?.login ? `@${c.author.login}` : 'anonymous';
+        const who = c.author?.login ? `@${forHtmlComment(c.author.login)}` : 'anonymous';
         const anchor = c.anchor?.kind === 'element'
-          ? `(on ${c.anchor.label || c.anchor.selector || 'element'})`
-          : c.anchor?.text ? `(on text: "${c.anchor.text.replace(/"/g, '\\"').slice(0, 120)}")` : '(no anchor)';
-        banner += `\n  [${i + 1}] ${who} ${anchor}\n    "${c.text.replace(/\n/g, ' ')}"\n${reactionsText(c.reactions)}`;
+          ? `(on ${forHtmlComment(c.anchor.label || c.anchor.selector || 'element')})`
+          : c.anchor?.text ? `(on text: "${forHtmlComment(c.anchor.text.replace(/"/g, '\\"').slice(0, 120))}")` : '(no anchor)';
+        banner += `\n  [${i + 1}] ${who} ${anchor}\n    "${forHtmlComment(c.text.replace(/\n/g, ' '))}"\n${reactionsText(c.reactions)}`;
         if (Array.isArray(c.replies)) {
           for (const r of c.replies) {
-            const rWho = r.author?.login ? `@${r.author.login}` : 'anonymous';
-            banner += `      ↳ ${rWho}: "${r.text.replace(/\n/g, ' ')}"\n${reactionsText(r.reactions).replace(/^/gm, '  ')}`;
+            const rWho = r.author?.login ? `@${forHtmlComment(r.author.login)}` : 'anonymous';
+            banner += `      ↳ ${rWho}: "${forHtmlComment(r.text.replace(/\n/g, ' '))}"\n${reactionsText(r.reactions).replace(/^/gm, '  ')}`;
           }
         }
       }
@@ -865,7 +893,7 @@ export default {
         if (!needle || needle.length < 2) continue;
         const idx = html.indexOf(needle);
         if (idx === -1) continue;
-        const replacement = `<!--TDOC-COMMENT id="${c.id}" by="${c.author?.login || 'anonymous'}"-->${needle}<!--/TDOC-COMMENT-->`;
+        const replacement = `<!--TDOC-COMMENT id="${forHtmlComment(c.id)}" by="${forHtmlComment(c.author?.login || 'anonymous')}"-->${needle}<!--/TDOC-COMMENT-->`;
         html = html.slice(0, idx) + replacement + html.slice(idx + needle.length);
       }
 
@@ -1045,7 +1073,7 @@ export default {
       ensureMigrated(list);
       const target = list.find(c => c.id === id);
       if (!target) return json({ error: 'not_found' }, { status: 404 });
-      if (target.author && target.author.login !== s.login) {
+      if (!canMutate(target, s, env)) {
         return json({ error: 'not_author' }, { status: 403 });
       }
       const V = Number(version) || target.created_in || 1;
@@ -1092,7 +1120,7 @@ export default {
       // Top-level?
       const top = list.find(c => c.id === id);
       if (top) {
-        if (top.author && top.author.login !== s.login) {
+        if (!canMutate(top, s, env)) {
           return json({ error: 'not_author' }, { status: 403 });
         }
         appendEvent(top, {
@@ -1106,7 +1134,7 @@ export default {
         ensureEventLog(c);
         const reply = (c.events || []).find(e => e.kind === 'reply_added' && e.reply && e.reply.id === id);
         if (!reply) continue;
-        if (reply.reply.author && reply.reply.author.login !== s.login) {
+        if (!canMutate(reply.reply, s, env)) {
           return json({ error: 'not_author' }, { status: 403 });
         }
         appendEvent(c, {
