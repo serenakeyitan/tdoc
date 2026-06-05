@@ -82,6 +82,14 @@ function rand(n) {
   return [...a].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Gated diagnostic logging. The device-flow poll path was instrumented during
+// an incident and left noisy console.log calls in production (visible in
+// `wrangler tail`). Gate them behind TDOC_DEBUG so they're off by default but
+// recoverable. Genuine error branches stay as console.error, unconditionally.
+function debug(env, ...args) {
+  if (env && env.TDOC_DEBUG) console.log(...args);
+}
+
 // Escape `</script>` and HTML comment terminators so a malicious or stray value
 // inside the JSON payload can't break out of the surrounding <script> block.
 function safeJsonForScript(obj) {
@@ -352,20 +360,27 @@ function reconcileAnchors(comments, aidsInVersion, V) {
   return comments;
 }
 
+// Inject the overlay boot + an arbitrary cfg into a document. Single source of
+// truth for "put window.__TDOC__ + overlay.js before </body>" — used by both
+// the published view and the /fork view (which previously re-implemented this
+// inline, risking drift).
+function injectOverlayCfg(rawHtml, cfg) {
+  const inject =
+    `<script>window.__TDOC__ = ${safeJsonForScript(cfg)};</script>\n` +
+    `<script>${OVERLAY_JS}</script>`;
+  if (rawHtml.includes('</body>')) return rawHtml.replace('</body>', `${inject}\n</body>`);
+  return rawHtml + inject;
+}
+
 function injectOverlay(rawHtml, slug, version, identity, versions, isOwner) {
-  const cfg = {
+  return injectOverlayCfg(rawHtml, {
     slug, version,
     identity: identity || null,
     isOwner: !!isOwner,
     authConfigured: true,
     mode: 'published',
     versions: Array.isArray(versions) && versions.length ? versions : [{ n: version }],
-  };
-  const inject =
-    `<script>window.__TDOC__ = ${safeJsonForScript(cfg)};</script>\n` +
-    `<script>${OVERLAY_JS}</script>`;
-  if (rawHtml.includes('</body>')) return rawHtml.replace('</body>', `${inject}\n</body>`);
-  return rawHtml + inject;
+  });
 }
 
 // Neutral landing page served at `/`. No catalog, no slug list — just
@@ -996,12 +1011,10 @@ export default {
       // anchors highlighted — without any backend.
       let bodyHtml = html;
       if (kind === 'fork') {
-        const forkCfg = { slug, version: Number(vStr), identity: null, authConfigured: false, mode: 'fork', originalSlug: slug };
-        const inject =
-          `<script>window.__TDOC__ = ${safeJsonForScript(forkCfg)};</script>\n` +
-          `<script>${OVERLAY_JS}</script>`;
-        if (bodyHtml.includes('</body>')) bodyHtml = bodyHtml.replace('</body>', `${inject}\n</body>`);
-        else bodyHtml = bodyHtml + inject;
+        bodyHtml = injectOverlayCfg(bodyHtml, {
+          slug, version: Number(vStr), identity: null,
+          authConfigured: false, mode: 'fork', originalSlug: slug,
+        });
       }
 
       const finalHtml = banner + jsonBlock + bodyHtml;
@@ -1056,7 +1069,7 @@ export default {
         });
         // Log the response shape (visible in `wrangler tail`) so we can debug
         // the post-approval path that's been hanging on "Waiting…".
-        console.log('[poll] gh response keys:', Object.keys(r).join(','), 'error:', r.error || 'none', 'has_token:', !!r.access_token);
+        debug(env, '[poll] gh response keys:', Object.keys(r).join(','), 'error:', r.error || 'none', 'has_token:', !!r.access_token);
         // GitHub returns errors *with* a 200 status. Pending states must keep
         // polling; everything else is a real failure surfaced to the user.
         if (r.error === 'authorization_pending' || r.error === 'slow_down') {
@@ -1068,13 +1081,16 @@ export default {
           return json({ error: r.error, message: r.error_description || r.error }, { status: 400 });
         }
         if (!r.access_token) return json({ pending: true });
-        console.log('[poll] got access_token, fetching /user');
+        debug(env, '[poll] got access_token, fetching /user');
         const user = await ghUser(r.access_token);
-        console.log('[poll] gh /user response keys:', Object.keys(user).join(','), 'login:', user.login || 'none');
+        debug(env, '[poll] gh /user response keys:', Object.keys(user).join(','), 'login:', user.login || 'none');
         if (!user.login) return json({ error: 'no_user', message: user.message || 'GitHub /user returned no login' }, { status: 500 });
         const sid = rand(24);
+        // Store only the identity we actually use. The GitHub access token is
+        // intentionally NOT persisted: nothing downstream reads session.token,
+        // and keeping a read:user token at rest for 30 days is needless
+        // exposure (data minimization).
         const session = {
-          token: r.access_token,
           login: user.login,
           avatar_url: user.avatar_url,
           name: user.name || user.login,
@@ -1395,7 +1411,7 @@ export default {
           httpMetadata: { contentType: 'text/html; charset=utf-8' },
         });
       } catch (e) {
-        console.log('[upload] R2 put failed:', e.message);
+        console.error('[upload] R2 put failed:', e.message);
         return json({ error: 'r2_put_failed', message: e.message }, { status: 500 });
       }
       // Verify the write actually landed before we tell the caller "ok".
@@ -1403,7 +1419,7 @@ export default {
       // silently dropping writes — leaving us with KV meta but no R2 doc.
       const verify = await env.DOCS.head(r2Key);
       if (!verify) {
-        console.log('[upload] R2 write did not persist:', r2Key);
+        console.error('[upload] R2 write did not persist:', r2Key);
         return json({ error: 'r2_write_lost', message: 'PUT succeeded but the key is not readable. Re-deploy the worker; the R2 binding may be stale.' }, { status: 500 });
       }
       if (meta) await env.META.put(`meta:${slug}`, JSON.stringify(meta));
@@ -1423,7 +1439,7 @@ export default {
           if (after !== before) await env.META.put(cKey, after);
         }
       } catch (e) {
-        console.log('[upload] anchor reconcile failed (non-fatal):', e.message);
+        console.error('[upload] anchor reconcile failed (non-fatal):', e.message);
       }
       return json({ ok: true, url: `/d/${slug}/v/${version}`, size: verify.size, aids: aids.length });
     }

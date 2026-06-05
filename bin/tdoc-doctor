@@ -23,10 +23,7 @@ SKILL_DIR="${SKILL_DIR:-$HOME/.claude/skills/tdoc}"
 CONFIG_FILE="${TDOC_CONFIG_FILE:-$HOME/.tdoc/published.json}"
 
 # --- helpers ---
-have() {
-  [ -n "${!1:-}" ] && return 1   # mock override "no_X" present → not have
-  command -v "$2" >/dev/null 2>&1
-}
+# (Removed unused have() helper — dead code from an abandoned rewrite.)
 
 # Use jq if available to assemble JSON properly; fall back to manual emission.
 HAS_JQ=0
@@ -112,12 +109,8 @@ fi
 # Each entry has: id, label, action_kind ("install"|"login"|"click"|"automatic"), command_or_url
 missing_json="[]"
 if $jq_ok; then
-  jq_args=()
-  add() { jq_args+=(--argjson m "$(jq -n --arg id "$1" --arg label "$2" --arg kind "$3" --arg cmd "$4" '{id:$id,label:$label,kind:$kind,cmd:$cmd}')" '. + [$m]'); }
-  cmds="."
-  add_step() {
-    cmds="$cmds | . + [{id:\"$1\",label:\"$2\",kind:\"$3\",cmd:\"$4\"}]"
-  }
+  # Single jq-filter builder. (An earlier abandoned `add()/add_step()/jq_args`
+  # mechanism + a duplicate `cmds="."` init were dead code — removed.)
   cmds="."
   $node_ok || cmds="$cmds | . + [{id:\"node\",label:\"Install Node 18+\",kind:\"install\",cmd:\"brew install node\"}]"
   $wrangler_ok || cmds="$cmds | . + [{id:\"wrangler\",label:\"Install wrangler CLI\",kind:\"install\",cmd:\"npm i -g wrangler\"}]"
