@@ -23,12 +23,12 @@ const OFFLINE = [
   'cli.test.js',              // CLI resilience (drives bash hermetically)
   'no-drift.test.js',         // duplicated-helper drift guard
   'coverage.test.js',         // migration, bundle inlining, pull-merge, rich fold
+  'api.test.js',              // hermetic: spawns its own server in a temp dir
 ];
 
 // Require network (live Cloudflare) or a browser (playwright). Not run in the
 // default offline suite. Listed so it's explicit what coverage is gated.
 const GATED = [
-  'api.test.js',         // needs a local server on :7878
   'onboarding.test.js',  // doctor flow
   'publish.test.js',     // dry-publish + (gated) real publish
   'responsive.test.js',  // playwright

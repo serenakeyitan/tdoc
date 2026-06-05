@@ -1,11 +1,13 @@
 // API integration test against the local server.
 // Run with: node test/api.test.js
-// Assumes server is reachable at localhost:7878.
+//
+// HERMETIC: spawns its own server with a throwaway TDOC_DIR and an ephemeral
+// port (was: assumed an already-running server on :7878 and wrote into the real
+// ~/tdocs, so it shared state with the user's actual docs and could collide).
 
 const http = require('http');
-
-const HOST = process.env.TDOC_HOST || 'localhost';
-const PORT = process.env.TDOC_PORT || 7878;
+const HOST = '127.0.0.1';
+let PORT = 0; // assigned after the spawned server picks an ephemeral port
 const SLUG = 'api-test-' + Date.now();
 
 let pass = 0, fail = 0;
@@ -36,12 +38,42 @@ function req(method, path, body) {
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const net = require('net');
+const { spawn } = require('child_process');
+
+// Pick a free ephemeral port so concurrent test runs don't collide on :7878.
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
+    s.on('error', reject);
+  });
+}
+function waitReady(port, ms = 5000) {
+  const deadline = Date.now() + ms;
+  return new Promise((resolve, reject) => {
+    (function probe() {
+      const r = http.get({ host: HOST, port, path: '/api/ping' }, (res) => { res.resume(); resolve(); });
+      r.on('error', () => { if (Date.now() > deadline) reject(new Error('server not ready')); else setTimeout(probe, 100); });
+    })();
+  });
+}
 
 (async () => {
-  console.log(`testing local API at ${HOST}:${PORT}\n`);
+  const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tdoc-api-'));
+  PORT = await freePort();
+  const serverPath = path.join(__dirname, '..', 'server', 'server.js');
+  const srv = spawn(process.execPath, [serverPath], {
+    env: { ...process.env, TDOC_DIR: TMP_DIR, TDOC_PORT: String(PORT), TDOC_HOST: '127.0.0.1' },
+    stdio: 'ignore',
+  });
+  const shutdown = () => { try { srv.kill('SIGKILL'); } catch {} try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {} };
+  process.on('exit', shutdown);
+  await waitReady(PORT);
+  console.log(`testing local API at ${HOST}:${PORT} (hermetic, TDOC_DIR=${TMP_DIR})\n`);
 
-  // Seed: create a doc directory + meta + empty comments
-  const docDir = path.join(os.homedir(), 'tdocs', SLUG);
+  // Seed: create a doc directory + meta + empty comments (in the temp dir)
+  const docDir = path.join(TMP_DIR, SLUG);
   fs.mkdirSync(path.join(docDir, 'v1'), { recursive: true });
   fs.writeFileSync(path.join(docDir, 'v1', 'index.html'), '<h1>api test</h1>');
   fs.writeFileSync(path.join(docDir, 'meta.json'), JSON.stringify({ title: 'api test', versions: [{ n: 1 }] }));
@@ -106,8 +138,8 @@ const os = require('os');
     if (after.body.length !== 0) throw new Error('top comment not removed');
   });
 
-  // Cleanup
-  try { fs.rmSync(docDir, { recursive: true, force: true }); } catch {}
+  // Cleanup: kill the spawned server + remove the temp dir.
+  shutdown();
 
   console.log(`\n${pass} passed, ${fail} failed.`);
   process.exit(fail ? 1 : 0);
