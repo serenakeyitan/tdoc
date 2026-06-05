@@ -171,40 +171,6 @@ function aidFor(tag, innerHtml, openAttrs) {
     .trim();
   return cyrb53(tag + '|' + intrinsics + '|' + norm);
 }
-// Elements whose body is raw text (CDATA-like): their content is NOT markup,
-// so a `</section>` or `>` inside them must never be treated as a tag. The
-// close scanner skips over these element bodies entirely.
-const RAW_TEXT_TAGS = ['script', 'style', 'textarea', 'title'];
-
-// Given the index of a `<` that begins an open tag, return the index just past
-// its closing `>`, treating `>` inside single/double-quoted attribute values
-// as ordinary text. Returns -1 if no terminator is found. This fixes the
-// finding where `<img alt="a > b">` (a `>` inside an attribute) made the naive
-// `[^>]*>` regex stop early and mis-compute element offsets.
-function attrAwareOpenTagEnd(html, lt) {
-  let i = lt + 1, quote = null;
-  for (; i < html.length; i++) {
-    const ch = html[i];
-    if (quote) { if (ch === quote) quote = null; continue; }
-    if (ch === '"' || ch === "'") { quote = ch; continue; }
-    if (ch === '>') return i + 1;
-  }
-  return -1;
-}
-
-// From `pos`, return the index just past the closing `>` of the next raw-text
-// element body that starts at/after `pos`, if `pos` is right at a raw-text open
-// tag; else null. Used to leap over <script>/<style> bodies so their unescaped
-// `</section>`-like content can't desync the depth counter.
-function skipRawTextBodyAt(html, openTag, attrs, openEnd) {
-  if (!RAW_TEXT_TAGS.includes(openTag)) return null;
-  if (/\/\s*$/.test(attrs)) return openEnd; // self-closed (rare/invalid) — nothing to skip
-  const closeRe = new RegExp(`</${openTag}\\s*>`, 'i');
-  closeRe.lastIndex = openEnd;
-  const m = closeRe.exec(html.slice(openEnd));
-  return m ? openEnd + m.index + m[0].length : html.length;
-}
-
 // Walk the HTML and stamp `data-tdoc-aid` on every commentable element.
 // Returns { html: <stamped>, aids: [{aid, tag, head, heading}] }.
 //
@@ -238,76 +204,32 @@ function stampAids(rawHtml) {
     const isVoid = /^(img|iframe)$/i.test(tagLower) || /\/\s*$/.test(attrs);
     let closeEnd = openEnd, innerHtml = '';
     if (!isVoid) {
-      // Depth-count matching open/close tags of THIS tag name, but:
-      //  - skip over raw-text element bodies (<script>/<style>/...) so their
-      //    unescaped content can't contain a fake close tag, and
-      //  - resolve each open tag's end attribute-aware (a `>` inside an
-      //    attribute value isn't the tag end).
-      const openSameRe = new RegExp(`<${tagLower}\\b`, 'gi');
-      const closeSameRe = new RegExp(`</${tagLower}\\s*>`, 'gi');
-      const rawOpenRe = new RegExp(`<(${RAW_TEXT_TAGS.join('|')})\\b`, 'gi');
-      let depth = 1, scan = openEnd, foundCloseEnd = -1;
-      while (scan < rawHtml.length) {
-        closeSameRe.lastIndex = scan;
-        openSameRe.lastIndex = scan;
-        rawOpenRe.lastIndex = scan;
-        const mc = closeSameRe.exec(rawHtml);
-        const mo = openSameRe.exec(rawHtml);
-        const mr = rawOpenRe.exec(rawHtml);
-        // pick the earliest of: a close, a nested same-tag open, a raw-text open
-        const next = [mc, mo, mr].filter(Boolean).sort((a, b) => a.index - b.index)[0];
-        if (!next) break;
-        if (next === mr) {
-          // leap over the raw-text body so its content can't desync depth
-          const rTag = mr[1].toLowerCase();
-          const rEnd = attrAwareOpenTagEnd(rawHtml, mr.index);
-          if (rEnd < 0) break;
-          const skipTo = skipRawTextBodyAt(rawHtml, rTag, rawHtml.slice(mr.index, rEnd), rEnd);
-          scan = skipTo != null ? skipTo : rEnd;
-          continue;
-        }
-        if (next === mc) {
-          depth--; if (depth === 0) { foundCloseEnd = mc.index + mc[0].length; break; }
-          scan = mc.index + mc[0].length;
-        } else { // nested same-tag open
-          depth++;
-          const oEnd = attrAwareOpenTagEnd(rawHtml, mo.index);
-          scan = oEnd < 0 ? mo.index + mo[0].length : oEnd;
-        }
+      const closeRe = new RegExp(`</${tagLower}\\s*>|<${tagLower}\\b[^>]*>`, 'gi');
+      closeRe.lastIndex = openEnd;
+      let depth = 1, c;
+      while ((c = closeRe.exec(rawHtml))) {
+        if (c[0][1] === '/') { depth--; if (depth === 0) { closeEnd = c.index + c[0].length; break; } }
+        else depth++;
       }
-      if (foundCloseEnd >= 0) closeEnd = foundCloseEnd;
       innerHtml = rawHtml.slice(openEnd, closeEnd - (`</${tagLower}>`.length));
     }
     seenOpens.add(openStart);
     elements.push({ openStart, openEnd, closeEnd, tag: tagLower, attrs, innerHtml, isVoid });
   }
-  // Pass 1: every known stampable tag. Find the `<tag\b` start, then resolve
-  // the open tag's true end attribute-aware so a `>` inside an attribute value
-  // doesn't truncate the attrs (which would corrupt the stamp + the aid).
+  // Pass 1: every known stampable tag.
   for (const tag of STAMPABLE_TAGS) {
-    const openRe = new RegExp(`<${tag}\\b`, 'gi');
+    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi');
     let m;
-    while ((m = openRe.exec(rawHtml))) {
-      const end = attrAwareOpenTagEnd(rawHtml, m.index);
-      if (end < 0) continue;
-      const attrs = rawHtml.slice(m.index + 1 + tag.length, end - 1);
-      harvest(m.index, end, tag, attrs);
-    }
+    while ((m = openRe.exec(rawHtml))) harvest(m.index, m.index + m[0].length, tag, m[1] || '');
   }
   // Pass 2: opt-in markers (any tag with data-tdoc-artifact or class
   // containing `tdoc-artifact`). Authors mark composed cards/widgets this
-  // way so they're commentable as a unit. Match the tag name + a quick
-  // attribute presence check, then resolve the real end attribute-aware.
-  const optInProbe = /<([a-z][\w-]*)\b/gi;
+  // way so they're commentable as a unit.
+  const optInRe = /<([a-z][\w-]*)\b([^>]*\b(?:data-tdoc-artifact\b|class\s*=\s*"[^"]*\btdoc-artifact\b[^"]*")[^>]*)>/gi;
   let om;
-  while ((om = optInProbe.exec(rawHtml))) {
+  while ((om = optInRe.exec(rawHtml))) {
     const tagLower = om[1].toLowerCase();
-    const end = attrAwareOpenTagEnd(rawHtml, om.index);
-    if (end < 0) continue;
-    const attrs = rawHtml.slice(om.index + 1 + om[1].length, end - 1);
-    if (/\bdata-tdoc-artifact\b/i.test(attrs) || /class\s*=\s*"[^"]*\btdoc-artifact\b[^"]*"/i.test(attrs)) {
-      harvest(om.index, end, tagLower, attrs);
-    }
+    harvest(om.index, om.index + om[0].length, tagLower, om[2] || '');
   }
   // Compute aid per element (uses cleaned attrs + inner content with any
   // existing data-tdoc-aid stripped, so re-stamping is idempotent).
