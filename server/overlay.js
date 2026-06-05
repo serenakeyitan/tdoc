@@ -51,7 +51,7 @@
   //   UI_ALL        — UI_CONTAINERS plus per-element decorations (anchor marks,
   //                   outlines, hover affordances, menus). Use this for event
   //                   delegation guards ("did the user click *our* chrome?").
-  const UI_CONTAINERS = '.tdoc-bar, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, #tdoc-comment-layer, .tdoc-footer';
+  const UI_CONTAINERS = '.tdoc-bar, .tdoc-oldver-strip, .tdoc-popup, .tdoc-margin-comment, .tdoc-modal-bg, #tdoc-comment-layer, .tdoc-footer';
   const UI_ALL = UI_CONTAINERS + ', .tdoc-anchor-mark, .tdoc-element-outline, .tdoc-hover-outline, .tdoc-comment-pill, .tdoc-emoji-picker, .tdoc-secondary-menu';
 
   // ========== Geometry helpers ==========
@@ -247,6 +247,15 @@
   .tdoc-reanchor-banner button:hover { background: rgba(255,255,255,0.28); }
   .tdoc-reanchor-banner button.danger { background: rgba(255,255,255,0.15); }
   .tdoc-reanchor-banner button.danger:hover { background: #c33; }
+  /* Old-version strip — a thin, quiet bar just under the top bar shown when
+     the viewer is on a non-latest version. Single-direction nudge: it only
+     points forward to the latest version. Hidden by default; the bar-setup
+     code reveals it (and adds the body padding) only when version < latest. */
+  .tdoc-oldver-strip { display: none; position: fixed; top: 44px; left: 0; right: 0; height: 28px; background: #fbf6e9; color: #6b5e3a; border-bottom: 1px solid #efe6cd; font: 12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; align-items: center; justify-content: center; gap: 6px; z-index: 999998; padding: 0 12px; }
+  body.tdoc-has-oldver-strip .tdoc-oldver-strip { display: flex; }
+  body.tdoc-has-oldver-strip { padding-top: 72px !important; }
+  .tdoc-oldver-strip a { color: #8a6d1f; font-weight: 600; text-decoration: none; border-bottom: 1px solid currentColor; }
+  .tdoc-oldver-strip a:hover { color: #6b5413; }
   /* Ghost marker — a faint horizontal line at the unanchored comment's
      original Y position, so the user can see where the deleted text used
      to be. Stays in document coordinates. */
@@ -595,6 +604,22 @@
     <div class="tdoc-bar-right">${rightHtml}</div>
   `;
   document.body.appendChild(bar);
+
+  // Old-version strip — a quiet, single-direction nudge shown only when a
+  // published viewer is looking at a non-latest version. `versions` is already
+  // sorted ascending above, so the last entry is the latest. Fork/local modes
+  // and the latest version itself get nothing.
+  if (isPublished && versions.length > 1) {
+    const latestVersion = versions[versions.length - 1].n;
+    if (typeof version === 'number' && version < latestVersion) {
+      const strip = document.createElement('div');
+      strip.className = 'tdoc-oldver-strip';
+      const latestUrl = `/d/${encodeURIComponent(slug)}/v/${latestVersion}`;
+      strip.innerHTML = `<span>You're viewing v${version} — the latest is <a href="${latestUrl}">v${latestVersion}</a></span>`;
+      document.body.appendChild(strip);
+      document.body.classList.add('tdoc-has-oldver-strip');
+    }
+  }
 
   // Re-anchor banner — shown while a re-anchor action is in flight. Three
   // explicit actions to avoid the gesture conflict (clicking empty space
