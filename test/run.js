@@ -25,6 +25,7 @@ const OFFLINE = [
   'coverage.test.js',         // migration, bundle inlining, pull-merge, rich fold
   'overlay-pure.test.js',     // overlay pure helpers (escape/normalize/prefix)
   'comment-upload.test.js',   // local→worker comment merge (non-destructive)
+  'stampaids.test.js',        // aid-stamp regex hardening (equivalence + edges)
   'api.test.js',              // hermetic: spawns its own server in a temp dir
 ];
 
