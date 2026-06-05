@@ -24,6 +24,7 @@ const OFFLINE = [
   'no-drift.test.js',         // duplicated-helper drift guard
   'coverage.test.js',         // migration, bundle inlining, pull-merge, rich fold
   'stampaids.test.js',        // aid-stamp regex hardening (equivalence + edges)
+  'overlay-pure.test.js',     // overlay pure helpers (escape/normalize/prefix)
   'api.test.js',              // hermetic: spawns its own server in a temp dir
 ];
 
