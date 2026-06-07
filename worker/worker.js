@@ -1233,22 +1233,26 @@ function applyCommentOp(list, op) {
   }
 }
 
-// Run a comment mutation for `slug`, serialized per-slug when the DO binding
-// exists. Returns { status, body }. The `op` must be JSON-serializable.
+// Run a comment mutation for `slug`, serialized per-slug through the DO. Returns
+// { status, body }. `op` must be JSON-serializable.
+//
+// IMPORTANT: the DO stores the comment list in state.storage (input-gated), NOT
+// in KV. Cloudflare's input gates only serialize Durable Object STORAGE
+// operations — KV reads/writes inside a DO still interleave across concurrent
+// requests, which silently loses updates (the bug a KV-based DO had). With
+// state.storage the get→mutate→put is gated and concurrent same-slug writes
+// serialize correctly.
 async function mutateComments(env, slug, op) {
   if (env.COMMENTS) {
-    const id = env.COMMENTS.idFromName(slug);
-    const stub = env.COMMENTS.get(id);
+    const stub = env.COMMENTS.get(env.COMMENTS.idFromName(slug));
     const r = await stub.fetch('https://do/mutate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ slug, op }),
     });
     return r.json();
   }
-  // Fallback (no DO binding yet): direct KV read-modify-write. NOT serialized —
-  // same behavior as before the migration, so the worker still works if the DO
-  // migration hasn't been applied.
+  // Fallback (DO binding absent): direct KV read-modify-write. NOT serialized,
+  // but keeps the worker functional without the DO. The DO path is the norm.
   const cKey = `comments:${slug}`;
   const raw = await env.META.get(cKey);
   const list = raw ? JSON.parse(raw) : [];
@@ -1261,29 +1265,69 @@ async function mutateComments(env, slug, op) {
   return clean;
 }
 
-// The Durable Object: single-threaded owner of one slug's comment list. Every
-// mutation for that slug funnels through one instance, so get→mutate→put is
-// atomic and concurrent writers serialize instead of clobbering.
+// Read the comment list for `slug` from the DO (the source of truth). Returns
+// the raw list array; callers fold it (snapshotList / historyList). When the DO
+// binding is absent, falls back to reading KV directly.
+async function readComments(env, slug) {
+  if (env.COMMENTS) {
+    const stub = env.COMMENTS.get(env.COMMENTS.idFromName(slug));
+    const r = await stub.fetch('https://do/read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug }),
+    });
+    const out = await r.json();
+    return Array.isArray(out.list) ? out.list : [];
+  }
+  const raw = await env.META.get(`comments:${slug}`);
+  return raw ? JSON.parse(raw) : [];
+}
+
+// The Durable Object: single-threaded, input-gated owner of one slug's comment
+// list. The list lives in state.storage under key 'list'. On first touch it is
+// lazily migrated in from the legacy KV value (comments:<slug>) so existing
+// comments are preserved with zero data loss; the KV value is left intact as a
+// backstop. All same-slug reads/writes funnel through this one instance.
 export class CommentsStore {
   constructor(state, env) { this.state = state; this.env = env; }
+
+  // Load the list from DO storage, lazily seeding from KV on first access.
+  async _load(slug) {
+    let list = await this.state.storage.get('list');
+    if (list === undefined) {
+      // First touch for this DO: migrate the existing KV comments in (or [] ).
+      const raw = await this.env.META.get(`comments:${slug}`);
+      list = raw ? JSON.parse(raw) : [];
+      await this.state.storage.put('list', list);
+    }
+    return list;
+  }
+
   async fetch(req) {
+    const u = new URL(req.url);
     let payload;
-    try { payload = await req.json(); } catch { return Response.json({ status: 400, body: { error: 'bad_request' } }); }
+    try { payload = await req.json(); } catch { return Response.json({ list: [] }); }
     const { slug, op } = payload;
-    const cKey = `comments:${slug}`;
-    // blockConcurrencyWhile serializes even the read-modify-write across the
-    // (rare) case of overlapping awaits inside this instance.
-    return this.state.blockConcurrencyWhile(async () => {
-      const raw = await this.env.META.get(cKey);
-      const list = raw ? JSON.parse(raw) : [];
-      const res = applyCommentOp(list, op);
-      if (res.status === 200) {
-        if (res.__wipe) await this.env.META.delete(cKey);
-        else await this.env.META.put(cKey, JSON.stringify(list));
-      }
-      const { __wipe, ...clean } = res;
-      return Response.json(clean);
-    });
+
+    if (u.pathname === '/read') {
+      const list = await this._load(slug);
+      return Response.json({ list });
+    }
+    // mutate: storage get → apply → storage put. These storage ops are
+    // input-gated, so the runtime serializes concurrent same-slug mutations.
+    const list = await this._load(slug);
+    const res = applyCommentOp(list, op);
+    if (res.status === 200) {
+      if (res.__wipe) await this.state.storage.put('list', []);
+      else await this.state.storage.put('list', list);
+      // Mirror to KV so the legacy value / any non-DO reader stays current
+      // (and as a durable backstop). Best-effort; the DO storage is canonical.
+      try {
+        if (res.__wipe) await this.env.META.delete(`comments:${slug}`);
+        else await this.env.META.put(`comments:${slug}`, JSON.stringify(list));
+      } catch { /* KV mirror is best-effort */ }
+    }
+    const { __wipe, ...clean } = res;
+    return Response.json(clean);
   }
 }
 
@@ -1361,8 +1405,7 @@ export default {
       if (!obj) return text(`Not found: ${slug} v${vStr}`, { status: 404 });
       let html = await obj.text();
 
-      const commentsRaw = await env.META.get(`comments:${slug}`);
-      const rawList = commentsRaw ? JSON.parse(commentsRaw) : [];
+      const rawList = await readComments(env, slug);
       ensureMigrated(rawList);
       // Snapshot the comments AS OF this exported version, then keep the
       // ones that are still actionable (not deleted, not resolved).
@@ -1537,15 +1580,10 @@ export default {
     if (p === '/api/comments' && method === 'GET') {
       const slug = url.searchParams.get('slug');
       if (!slug) return json({ error: 'slug required' }, { status: 400 });
-      const raw = await env.META.get(`comments:${slug}`);
-      const list = raw ? JSON.parse(raw) : [];
-      // Migrate legacy records IN MEMORY for this response only. We must NOT
-      // persist from a read: a GET get-migrate-put runs outside the per-slug DO,
-      // so a concurrent DO mutation could be clobbered by GET writing back its
-      // stale-but-migrated copy (lost update — exactly what #34 prevents).
-      // Persistence of the migrated shape happens on the next WRITE, which goes
-      // through applyCommentOp (it calls ensureMigrated before the serialized
-      // put). Reads always present migrated data; disk converges on next write.
+      // Read from the DO (source of truth; it lazily migrates from KV on first
+      // touch). Migrate-in-memory for this response only — never persist from a
+      // read (writes go through the DO).
+      const list = await readComments(env, slug);
       ensureMigrated(list);
       const V = parseVersionParam(url);
       // `?version=all` returns every comment across all versions (lossless,
@@ -1587,8 +1625,7 @@ export default {
       // Auth read (canMutate needs session+env): resolve the target up front.
       // The serialized write then runs through the DO. A target deleted between
       // this check and the write is harmless — applyCommentOp returns 404.
-      const authRaw = await env.META.get(`comments:${slug}`);
-      const authList = authRaw ? JSON.parse(authRaw) : [];
+      const authList = await readComments(env, slug);
       ensureMigrated(authList);
       const target = authList.find(c => c.id === id);
       if (!target) return json({ error: 'not_found' }, { status: 404 });
@@ -1631,8 +1668,7 @@ export default {
       // (top-level OR reply) and verify the actor can delete it. The serialized
       // soft-delete write then runs through the DO; a target removed in between
       // is harmless (applyCommentOp returns 404).
-      const authRaw = await env.META.get(`comments:${slug}`);
-      const authList = authRaw ? JSON.parse(authRaw) : [];
+      const authList = await readComments(env, slug);
       ensureMigrated(authList);
       let authorized = false;
       const top = authList.find(c => c.id === id);
@@ -1698,8 +1734,7 @@ export default {
       // the folded anchor for label/fallback). agent/reply is upload-token-authed
       // (owner-only), so concurrency here is negligible; the serialized write
       // still funnels through the DO so it can't clobber a concurrent user write.
-      const authRaw = await env.META.get(`comments:${slug}`);
-      const authList = authRaw ? JSON.parse(authRaw) : [];
+      const authList = await readComments(env, slug);
       ensureMigrated(authList);
       const parent = authList.find(c => c.id === parent_id);
       if (!parent) return json({ error: 'parent_not_found' }, { status: 404 });
@@ -1776,8 +1811,7 @@ export default {
         // real doc → that doc needs the aid migration in docs/DESIGN-aid-
         // migration.md. Reads its own copy, never mutates. Empirically 0.
         try {
-          const dr = await env.META.get(`comments:${slug}`);
-          const drift = measureAidDrift(doc, dr ? JSON.parse(dr) : []);
+          const drift = measureAidDrift(doc, await readComments(env, slug));
           if (drift.affectedComments > 0) {
             console.warn(`[aid-drift] slug=${slug} v=${version} changedAids=${drift.changed} affectedComments=${drift.affectedComments} samples=${JSON.stringify(drift.samples)} — these anchors will rebind via reconcile; see docs/DESIGN-aid-migration.md`);
           } else {
