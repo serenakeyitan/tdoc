@@ -216,7 +216,6 @@
   .tdoc-chip .name { font-size: 13px; font-weight: 500; }
   .tdoc-chip.signin { padding: 7px 14px; background: #1652f0; color: #fff; font-weight: 600; }
   .tdoc-chip.signin:hover { background: #1245d0; }
-  .tdoc-chip.signin:hover { background: #1245d0; }
 
   /* Comment cards */
   #tdoc-comment-layer { position: absolute; top: 0; left: 0; width: 100%; pointer-events: none; z-index: 999996; }
@@ -761,7 +760,7 @@
       slot.innerHTML =
         `<div class="tdoc-menu-wrap">
           <button class="tdoc-chip" id="tdoc-me" aria-haspopup="menu" aria-expanded="false">
-            <img src="${identity.avatar_url}" alt=""><span class="name">${escapeHtml(identity.login)}</span>
+            <img src="${escapeHtml(identity.avatar_url || '')}" alt=""><span class="name">${escapeHtml(identity.login)}</span>
           </button>
           <div class="tdoc-menu" id="tdoc-me-menu" role="menu">
             ${isOwner ? `<button id="tdoc-my-docs" role="menuitem">My docs</button>` : ''}
@@ -1152,25 +1151,27 @@
       const mine = users.includes(me);
       const hasAgent = users.includes('tdoc-agent');
       const cls = [`tdoc-react-chip`, mine ? 'mine' : '', hasAgent ? 'agent' : ''].filter(Boolean).join(' ');
-      return `<span class="${cls}" data-emoji="${escapeHtml(emoji)}" data-target-id="${target.id}" data-users="${users.map(escapeHtml).join('\n')}">${emoji} ${users.length}</span>`;
+      return `<span class="${cls}" data-emoji="${escapeHtml(emoji)}" data-target-id="${escapeHtml(target.id)}" data-users="${users.map(escapeHtml).join('\n')}">${emoji} ${users.length}</span>`;
     }).join('');
-    return `<div class="tdoc-reactions" data-target-id="${target.id}">${chips}<button class="tdoc-react-add" data-target-id="${target.id}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button></div>`;
+    return `<div class="tdoc-reactions" data-target-id="${escapeHtml(target.id)}">${chips}<button class="tdoc-react-add" data-target-id="${escapeHtml(target.id)}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button></div>`;
   }
   function renderReactInline(target) {
-    return `<button class="tdoc-react-add inline" data-target-id="${target.id}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button>`;
+    return `<button class="tdoc-react-add inline" data-target-id="${escapeHtml(target.id)}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button>`;
   }
   function renderReply(reply) {
     const canDelete = !isFork && (!isPublished || (identity && reply.author && identity.login === reply.author.login));
     const hasReactions = reply.reactions && Object.values(reply.reactions).some(u => u && u.length > 0);
     const isAgent = reply.author?.kind === 'agent';
-    const statusChip = reply.agent_status
-      ? `<span class="tdoc-agent-status tdoc-agent-status-${reply.agent_status}">${
-          reply.agent_status === 'applied' ? '✓ applied' :
-          reply.agent_status === 'partial' ? '◐ partial' :
+    // Whitelist the status (it drives a CSS class) instead of interpolating raw.
+    const safeStatus = ['applied', 'partial', 'question'].includes(reply.agent_status) ? reply.agent_status : null;
+    const statusChip = safeStatus
+      ? `<span class="tdoc-agent-status tdoc-agent-status-${safeStatus}">${
+          safeStatus === 'applied' ? '✓ applied' :
+          safeStatus === 'partial' ? '◐ partial' :
           '? question'
         }</span>`
       : '';
-    return `<div class="tdoc-reply${isAgent ? ' tdoc-agent-reply' : ''}" data-comment-id="${reply.id}">
+    return `<div class="tdoc-reply${isAgent ? ' tdoc-agent-reply' : ''}" data-comment-id="${escapeHtml(reply.id)}">
       ${renderAuthor(reply.author)}
       ${statusChip}
       <div class="text">${escapeHtml(reply.text)}</div>
@@ -1179,7 +1180,7 @@
         <span>${new Date(reply.created).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         <span class="actions">
           ${!hasReactions && !isFork ? renderReactInline(reply) : ''}
-          ${canDelete ? `<span class="del" data-id="${reply.id}">delete</span>` : ''}
+          ${canDelete ? `<span class="del" data-id="${escapeHtml(reply.id)}">delete</span>` : ''}
         </span>
       </div>
     </div>`;
@@ -1193,7 +1194,7 @@
     const hasReactions = comment.reactions && Object.values(comment.reactions).some(u => u && u.length > 0);
     card.innerHTML = `
       ${isFork ? '' : `<div class="tdoc-anchor-actions">
-        <button class="tdoc-reanchor-btn" type="button" data-id="${comment.id}"><span class="tdoc-reanchor-unanchored">unanchored — click to re-anchor</span><span class="tdoc-reanchor-anchored">↻ move anchor</span></button>
+        <button class="tdoc-reanchor-btn" type="button" data-id="${escapeHtml(comment.id)}"><span class="tdoc-reanchor-unanchored">unanchored — click to re-anchor</span><span class="tdoc-reanchor-anchored">↻ move anchor</span></button>
       </div>`}
       ${renderAuthor(comment.author)}
       <div class="text">${escapeHtml(comment.text)}</div>
@@ -1202,19 +1203,19 @@
         <span>v${comment.version} · ${new Date(comment.created).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         <span class="actions">
           ${!hasReactions && !isFork ? renderReactInline(comment) : ''}
-          ${isFork ? '' : `<span class="tdoc-reply-toggle" data-id="${comment.id}">Reply</span>`}
-          <span class="copy-md" data-id="${comment.id}" title="Copy as Markdown" aria-label="Copy as Markdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
-          ${canDelete ? `<span class="del" data-id="${comment.id}">delete</span>` : ''}
+          ${isFork ? '' : `<span class="tdoc-reply-toggle" data-id="${escapeHtml(comment.id)}">Reply</span>`}
+          <span class="copy-md" data-id="${escapeHtml(comment.id)}" title="Copy as Markdown" aria-label="Copy as Markdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          ${canDelete ? `<span class="del" data-id="${escapeHtml(comment.id)}">delete</span>` : ''}
         </span>
       </div>
       ${replies.length ? `
-        <div class="tdoc-replies-toggle" data-id="${comment.id}">
+        <div class="tdoc-replies-toggle" data-id="${escapeHtml(comment.id)}">
           <svg class="chev" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
           ${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}
         </div>
         <div class="tdoc-replies">${replies.map(r => renderReply(r)).join('')}</div>
       ` : ''}
-      ${isFork ? '' : `<div class="tdoc-reply-form" data-parent-id="${comment.id}">
+      ${isFork ? '' : `<div class="tdoc-reply-form" data-parent-id="${escapeHtml(comment.id)}">
         <textarea placeholder="Reply…"></textarea>
         <div class="tdoc-reply-form-foot">
           <span class="hint">⌘+Enter to submit · Esc to cancel</span>

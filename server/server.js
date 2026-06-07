@@ -115,6 +115,17 @@ function injectOverlay(html, slug, version) {
   return html + inject;
 }
 
+// Always returns an array for a comments file. A comments.json that parses to a
+// non-array (corrupt / hand-edited to `{}`) would otherwise crash the .filter/
+// .find/.push that follow every read (#33 hardening).
+function readCommentFile(file) {
+  const v = readJson(file, []);
+  return Array.isArray(v) ? v : [];
+}
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function indexPage() {
   const slugs = fs.readdirSync(ROOT).filter(f => {
     try { return fs.statSync(path.join(ROOT, f)).isDirectory() && !f.startsWith('.'); }
@@ -123,11 +134,11 @@ function indexPage() {
   const rows = slugs.map(slug => {
     const meta = readJson(path.join(ROOT, slug, 'meta.json'), { title: slug, versions: [] });
     const latest = meta.versions?.[meta.versions.length - 1]?.n || 1;
-    const comments = readJson(path.join(ROOT, slug, 'comments.json'), []);
+    const comments = readCommentFile(path.join(ROOT, slug, 'comments.json'));
     const open = comments.filter(c => c.status === 'open').length;
     return `<tr>
-      <td><a href="/d/${slug}/v/${latest}">${meta.title || slug}</a></td>
-      <td>${slug}</td>
+      <td><a href="/d/${encodeURIComponent(slug)}/v/${latest}">${escHtml(meta.title || slug)}</a></td>
+      <td>${escHtml(slug)}</td>
       <td>v${latest}</td>
       <td>${open ? `<b>${open} open</b>` : '—'}</td>
     </tr>`;
@@ -174,7 +185,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/comments' && req.method === 'GET') {
     const slug = safeSlug(url.searchParams.get('slug'));
     if (!slug) return json(res, 400, { error: 'invalid or missing slug' });
-    return json(res, 200, readJson(path.join(ROOT, slug, 'comments.json'), []));
+    return json(res, 200, readCommentFile(path.join(ROOT, slug, 'comments.json')));
   }
 
   if (p === '/api/comments' && req.method === 'POST') {
@@ -184,7 +195,7 @@ const server = http.createServer(async (req, res) => {
     const { version, anchor, text, parent_id } = body;
     if (!slug || !text) return json(res, 400, { error: 'invalid slug or missing text' });
     const file = path.join(ROOT, slug, 'comments.json');
-    const comments = readJson(file, []);
+    const comments = readCommentFile(file);
     const created = new Date().toISOString();
     if (parent_id) {
       const parent = comments.find(c => c.id === parent_id);
@@ -227,7 +238,7 @@ const server = http.createServer(async (req, res) => {
     const { parent_id, text, status: agentStatus, applied_in } = body;
     if (!slug || !parent_id || !text) return json(res, 400, { error: 'invalid slug or missing parent_id/text' });
     const file = path.join(ROOT, slug, 'comments.json');
-    const all = readJson(file, []);
+    const all = readCommentFile(file);
     const parent = all.find(c => c.id === parent_id);
     if (!parent) return json(res, 404, { error: 'parent_not_found' });
     if (!Array.isArray(parent.replies)) parent.replies = [];
@@ -264,7 +275,7 @@ const server = http.createServer(async (req, res) => {
     const { id, anchor } = body;
     if (!slug || !id || !anchor) return json(res, 400, { error: 'invalid slug or missing id/anchor' });
     const file = path.join(ROOT, slug, 'comments.json');
-    const all = readJson(file, []);
+    const all = readCommentFile(file);
     const target = all.find(c => c.id === id);
     if (!target) return json(res, 404, { error: 'not_found' });
     target.anchor = anchor;
@@ -288,7 +299,7 @@ const server = http.createServer(async (req, res) => {
     const id = url.searchParams.get('id');
     if (!slug || !id) return json(res, 400, { error: 'invalid slug or missing id' });
     const file = path.join(ROOT, slug, 'comments.json');
-    const all = readJson(file, []);
+    const all = readCommentFile(file);
     const top = all.find(c => c.id === id);
     if (top) {
       writeJson(file, all.filter(c => c.id !== id));
@@ -314,7 +325,7 @@ const server = http.createServer(async (req, res) => {
     if (!slug || !comment_id || !emoji) return json(res, 400, { error: 'invalid slug or missing comment_id/emoji' });
     if (emoji.length === 0 || emoji.length > 8) return json(res, 400, { error: 'invalid_emoji' });
     const file = path.join(ROOT, slug, 'comments.json');
-    const all = readJson(file, []);
+    const all = readCommentFile(file);
     function findTarget(list) {
       for (const c of list) {
         if (c.id === comment_id) return c;

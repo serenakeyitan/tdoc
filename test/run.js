@@ -26,6 +26,7 @@ const OFFLINE = [
   'overlay-pure.test.js',     // overlay pure helpers (escape/normalize/prefix)
   'comment-upload.test.js',   // local→worker comment merge (non-destructive)
   'comment-ops.test.js',      // #34 DO-serialized mutation ops
+  'p3-hardening.test.js',     // #33 safeParseList + escapeHtml
   'stampaids.test.js',        // aid-stamp regex hardening (equivalence + edges)
   'api.test.js',              // hermetic: spawns its own server in a temp dir
 ];

@@ -96,6 +96,14 @@ function safeJsonForScript(obj) {
   return JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
 }
 
+// Full HTML escaping for interpolating untrusted strings into markup (text OR
+// attribute context). The catalog/index pages previously escaped only `<`,
+// leaving `"`/`'`/`&` unprotected in attribute contexts (#33 hardening).
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 // Make an untrusted string safe to interpolate inside an HTML comment (or an
 // HTML-comment-delimited marker). Comment text and author logins are
 // attacker-controllable (any signed-in user can post a comment), so without
@@ -660,8 +668,8 @@ async function indexHtml(env, session) {
     const exists = await env.DOCS.head(`docs/${slug}/v${latest}/index.html`);
     if (!exists) continue;
     rows.push(`<tr>
-      <td><a href="/d/${slug}/v/${latest}">${(meta.title || slug).replace(/</g, '&lt;')}</a></td>
-      <td>${slug}</td>
+      <td><a href="/d/${encodeURIComponent(slug)}/v/${latest}">${escapeHtml(meta.title || slug)}</a></td>
+      <td>${escapeHtml(slug)}</td>
       <td>v${latest}</td>
     </tr>`);
   }
@@ -681,7 +689,7 @@ async function indexHtml(env, session) {
   .who b { color: #444; font-weight: 600; }
 </style></head><body>
 <h1>My docs</h1>
-<p class="who">Documents hosted on this worker${session && session.login ? ` · signed in as <b>${String(session.login).replace(/</g, '&lt;')}</b>` : ''}.</p>
+<p class="who">Documents hosted on this worker${session && session.login ? ` · signed in as <b>${escapeHtml(session.login)}</b>` : ''}.</p>
 ${rows.length === 0 ? '<p class="empty">No published docs yet.</p>' :
   `<table><thead><tr><th>Title</th><th>Slug</th><th>Version</th></tr></thead><tbody>${rows.join('')}</tbody></table>`}
 </body></html>`;
@@ -1233,6 +1241,23 @@ function applyCommentOp(list, op) {
   }
 }
 
+// Parse a stored comments value defensively. A corrupt KV/DO value (malformed
+// JSON, or JSON that isn't an array) must NOT turn every comment operation for
+// that slug into a permanent 500 — we log and fall back to an empty list so the
+// slug self-heals on the next write. (#33 hardening.)
+function safeParseList(raw) {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    if (Array.isArray(v)) return v;
+    console.error('[comments] stored value is not an array — treating as empty');
+    return [];
+  } catch (e) {
+    console.error('[comments] corrupt stored value, treating as empty:', e.message);
+    return [];
+  }
+}
+
 // Run a comment mutation for `slug`, serialized per-slug through the DO. Returns
 // { status, body }. `op` must be JSON-serializable.
 //
@@ -1255,7 +1280,7 @@ async function mutateComments(env, slug, op) {
   // but keeps the worker functional without the DO. The DO path is the norm.
   const cKey = `comments:${slug}`;
   const raw = await env.META.get(cKey);
-  const list = raw ? JSON.parse(raw) : [];
+  const list = safeParseList(raw);
   const res = applyCommentOp(list, op);
   if (res.status === 200) {
     if (res.__wipe) await env.META.delete(cKey);
@@ -1279,7 +1304,7 @@ async function readComments(env, slug) {
     return Array.isArray(out.list) ? out.list : [];
   }
   const raw = await env.META.get(`comments:${slug}`);
-  return raw ? JSON.parse(raw) : [];
+  return safeParseList(raw);
 }
 
 // The Durable Object: single-threaded, input-gated owner of one slug's comment
@@ -1296,7 +1321,13 @@ export class CommentsStore {
     if (list === undefined) {
       // First touch for this DO: migrate the existing KV comments in (or [] ).
       const raw = await this.env.META.get(`comments:${slug}`);
-      list = raw ? JSON.parse(raw) : [];
+      list = safeParseList(raw);
+      await this.state.storage.put('list', list);
+    } else if (!Array.isArray(list)) {
+      // Defense-in-depth: a non-array ever in DO storage would crash
+      // applyCommentOp's array ops. Self-heal to [] (logged).
+      console.error('[comments] DO storage value not an array — resetting to []');
+      list = [];
       await this.state.storage.put('list', list);
     }
     return list;
@@ -1328,7 +1359,13 @@ export class CommentsStore {
       if (list === undefined) {
         // First-touch migration from the legacy KV value, inside the txn.
         const raw = await this.env.META.get(`comments:${slug}`);
-        list = raw ? JSON.parse(raw) : [];
+        list = safeParseList(raw);
+      } else if (!Array.isArray(list)) {
+        // Self-heal a non-array DO value, and persist the repair NOW (inside the
+        // txn) even if the mutation below fails — so a corrupt value can't
+        // linger and keep 500ing future ops.
+        list = [];
+        await txn.put('list', list);
       }
       const res = applyCommentOp(list, op);
       if (res.status === 200) await txn.put('list', res.__wipe ? [] : list);
