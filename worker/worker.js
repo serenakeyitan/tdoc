@@ -1312,21 +1312,36 @@ export class CommentsStore {
       const list = await this._load(slug);
       return Response.json({ list });
     }
-    // mutate: storage get → apply → storage put. These storage ops are
-    // input-gated, so the runtime serializes concurrent same-slug mutations.
-    const list = await this._load(slug);
-    const res = applyCommentOp(list, op);
-    if (res.status === 200) {
-      if (res.__wipe) await this.state.storage.put('list', []);
-      else await this.state.storage.put('list', list);
-      // Mirror to KV so the legacy value / any non-DO reader stays current
-      // (and as a durable backstop). Best-effort; the DO storage is canonical.
+
+    // Atomic read-modify-write via state.storage.transaction(). Per the
+    // Cloudflare docs, transaction() is the correct primitive for RMW during
+    // request handling — storage ops inside it are atomic + isolated, so
+    // concurrent same-slug mutations serialize. Two prior attempts failed:
+    // (1) KV inside the DO wasn't input-gated → lost updates; (2)
+    // blockConcurrencyWhile around the whole handler threw HTTP 500 under
+    // concurrency (it's the documented anti-pattern for request handling). KV
+    // mirroring is done AFTER the transaction commits so non-storage I/O can't
+    // break the transaction's atomicity.
+    let out;
+    await this.state.storage.transaction(async (txn) => {
+      let list = await txn.get('list');
+      if (list === undefined) {
+        // First-touch migration from the legacy KV value, inside the txn.
+        const raw = await this.env.META.get(`comments:${slug}`);
+        list = raw ? JSON.parse(raw) : [];
+      }
+      const res = applyCommentOp(list, op);
+      if (res.status === 200) await txn.put('list', res.__wipe ? [] : list);
+      out = { res, persist: res.status === 200 ? (res.__wipe ? [] : list) : null, wipe: !!res.__wipe };
+    });
+    // Best-effort KV mirror (backstop; DO storage is canonical), after commit.
+    if (out.persist !== null) {
       try {
-        if (res.__wipe) await this.env.META.delete(`comments:${slug}`);
-        else await this.env.META.put(`comments:${slug}`, JSON.stringify(list));
-      } catch { /* KV mirror is best-effort */ }
+        if (out.wipe) await this.env.META.delete(`comments:${slug}`);
+        else await this.env.META.put(`comments:${slug}`, JSON.stringify(out.persist));
+      } catch { /* best-effort */ }
     }
-    const { __wipe, ...clean } = res;
+    const { __wipe, ...clean } = out.res;
     return Response.json(clean);
   }
 }
