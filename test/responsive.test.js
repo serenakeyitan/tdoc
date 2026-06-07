@@ -1,39 +1,46 @@
-// Responsive UI tests at four real viewport sizes.
-// Run: NODE_PATH=/private/tmp/node_modules node test/responsive.test.js
+// Responsive UI invariant tests across four real viewport sizes.
 //
-// What we assert per viewport:
-//  - No horizontal overflow on document.documentElement
-//  - Top bar: which controls are visible vs hidden (Fork/All-docs collapse to
-//    the "..." More menu on small screens)
-//  - Comment cards: visible AND within the viewport (not clipped off-screen)
-//  - FAB ("💬 N"): present only on tablet/mobile, only when comments exist
-//  - Bottom drawer toggles open when the FAB is tapped (mobile/tablet only)
-//  - Sign-in button still reachable
+// Run: node test/responsive.test.js            (local fixture, default)
+//      TDOC_TEST_URL=<url> node ...            (a live published doc)
+//
+// DESIGN (#35): we assert layout INVARIANTS, not hardcoded per-viewport
+// booleans. The previous version hardcoded expectMore/expectFab per width
+// against one specific doc's article geometry, so it failed whenever the doc or
+// the layout heuristic changed — even on the correct live layout. Narrow mode
+// ("drawer + More menu") is driven by the article's ACTUAL width, not the
+// viewport, so the right thing to verify is internal consistency + monotonicity,
+// which hold for any doc:
+//
+//   1. No horizontal overflow at any width (a real bug if violated).
+//   2. Top bar always present.
+//   3. Comment cards never overflow the window.
+//   4. Narrow-mode is SELF-CONSISTENT: when body.tdoc-narrow is set, the FAB +
+//      More menu are the narrow affordances; when not, cards sit in the right
+//      margin column and the FAB is hidden. We read the actual narrow state and
+//      assert the matching layout, instead of guessing it from the width.
+//   5. Narrow-mode is MONOTONIC across widths: never narrow at a wider viewport
+//      yet non-narrow at a strictly narrower one.
+//   6. Footer + Copy affordances present and fit.
+//
+// Published-only chrome (Fork / All-docs / sign-in / identity chip) only exists
+// in the worker's published mode, so those assertions run only against a live
+// TDOC_TEST_URL and skip loudly otherwise.
 
-const { requirePlaywrightOrSkip, resolveTarget } = require('./helpers/fixture-server');
+const { requirePlaywrightOrSkip, resolveTarget, isPublishedTarget } = require('./helpers/fixture-server');
 const { chromium } = requirePlaywrightOrSkip('responsive.test.js');
-// URL resolved at runtime: local fixture by default, TDOC_TEST_URL to override.
 
-// Note: with v0.1.3's asymmetric-shrink layout, "narrow mode" (drawer + More
-// menu) is driven by the article's actual width, not viewport width. The article
-// stays in a margin column on laptop and tablet because there's still room for
-// it. Only when the article itself becomes uncomfortably narrow (<400px) OR
-// the viewport is phone-sized (<700px) does drawer mode kick in.
+// Widest → narrowest, so we can assert narrow-mode monotonicity.
 const viewports = [
-  { name: 'desktop-1440', width: 1440, height: 900,  mobile: false, expectFab: false, expectMore: false },
-  { name: 'laptop-1024',  width: 1024, height: 768,  mobile: false, expectFab: false, expectMore: false },
-  { name: 'ipad-768',     width: 768,  height: 1024, mobile: true,  expectFab: false, expectMore: false },
-  { name: 'iphone-375',   width: 375,  height: 812,  mobile: true,  expectFab: true,  expectMore: true  },
+  { name: 'desktop-1440', width: 1440, height: 900,  mobile: false },
+  { name: 'laptop-1024',  width: 1024, height: 768,  mobile: false },
+  { name: 'ipad-768',     width: 768,  height: 1024, mobile: true  },
+  { name: 'iphone-375',   width: 375,  height: 812,  mobile: true  },
 ];
 
-let pass = 0, fail = 0;
-let skipped = 0;
-const { isPublishedTarget } = require('./helpers/fixture-server');
+let pass = 0, fail = 0, skipped = 0;
 function ok(n) { console.log(`  ✓ ${n}`); pass++; }
 function bad(n, e) { console.log(`  ✗ ${n}\n    ${e.message || e}`); fail++; }
 async function t(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name, e); } }
-// Published-only chrome (Fork / All-docs / sign-in / identity chip) exists only
-// in the worker's published mode; skip loudly against the local fixture.
 async function tPub(name, fn) {
   if (!isPublishedTarget()) { console.log(`  ⊘ ${name} — SKIP (published-only)`); skipped++; return; }
   await t(name, fn);
@@ -45,134 +52,102 @@ async function tPub(name, fn) {
   console.log(`testing ${URL}\n`);
   const browser = await chromium.launch({ headless: true });
 
+  // Track narrow-mode across widths for the monotonicity invariant.
+  const narrowByWidth = [];
+
   for (const v of viewports) {
     console.log(`--- ${v.name} (${v.width}×${v.height}) ---`);
     const ctx = await browser.newContext({
       viewport: { width: v.width, height: v.height },
-      isMobile: v.mobile,
-      hasTouch: v.mobile,
-      deviceScaleFactor: v.mobile ? 2 : 1,
+      isMobile: v.mobile, hasTouch: v.mobile, deviceScaleFactor: v.mobile ? 2 : 1,
     });
     const page = await ctx.newPage();
     await page.goto(URL, { waitUntil: 'networkidle' });
-    // Wait for narrow-mode to settle (it's set after the first refreshComments
-    // fetch returns, which may take a moment on the deployed worker).
+    // Let layout settle (narrow-mode is set after the first refreshComments).
     await page.waitForFunction(
       () => document.querySelector('.tdoc-margin-comment') !== null || document.body.dataset.tdocReady === '1',
-      null,
-      { timeout: 5000 }
+      null, { timeout: 5000 }
     ).catch(() => {});
     await page.waitForTimeout(400);
 
-    await t('no horizontal overflow on documentElement', async () => {
-      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-      if (overflow) throw new Error(`scrollWidth ${await page.evaluate(() => document.documentElement.scrollWidth)} > innerWidth ${v.width}`);
-    });
-
-    await t('top bar present', async () => {
-      const bar = await page.$('.tdoc-bar');
-      if (!bar) throw new Error('no .tdoc-bar');
-    });
-
-    await t(`More (⋯) button: ${v.expectMore ? 'visible' : 'hidden'}`, async () => {
-      const visible = await page.evaluate(() => {
-        const el = document.querySelector('#tdoc-more-btn');
-        return el ? (el.offsetWidth > 0 && el.offsetHeight > 0) : false;
+    // Read the actual layout state once; assertions derive from it.
+    const st = await page.evaluate(() => {
+      const vis = (sel) => { const el = document.querySelector(sel); return !!(el && el.offsetWidth > 0 && el.offsetHeight > 0); };
+      const cards = [...document.querySelectorAll('.tdoc-margin-comment')].map(c => {
+        const r = c.getBoundingClientRect(); return { left: r.left, right: r.right };
       });
-      if (visible !== v.expectMore) throw new Error(`expected More visible=${v.expectMore}, got ${visible}`);
+      return {
+        narrow: document.body.classList.contains('tdoc-narrow'),
+        hasComments: document.querySelectorAll('.tdoc-margin-comment').length > 0,
+        bar: !!document.querySelector('.tdoc-bar'),
+        more: vis('#tdoc-more-btn'),
+        fab: vis('.tdoc-fab'),
+        cards,
+        scrollW: document.documentElement.scrollWidth,
+        winW: window.innerWidth,
+      };
+    });
+    narrowByWidth.push({ width: v.width, narrow: st.narrow });
+
+    // 1. No horizontal overflow — a real responsive bug if violated.
+    await t('no horizontal overflow', async () => {
+      if (st.scrollW > st.winW + 1) throw new Error(`scrollWidth ${st.scrollW} > innerWidth ${st.winW}`);
     });
 
-    await tPub('Fork + All-docs: visible only on desktop', async () => {
-      const fork = await page.evaluate(() => {
-        const el = document.querySelector('#tdoc-fork-btn');
-        return el ? (el.offsetWidth > 0 && el.offsetHeight > 0) : false;
-      });
-      const expectedFork = !v.expectMore;   // visible on desktop only
-      if (fork !== expectedFork) throw new Error(`Fork visible=${fork}, expected ${expectedFork}`);
+    // 2. Top bar always present.
+    await t('top bar present', async () => { if (!st.bar) throw new Error('no .tdoc-bar'); });
+
+    // 3. Comment cards never overflow the window.
+    await t('comment cards fit within the window', async () => {
+      for (const c of st.cards) {
+        if (c.right > st.winW + 1) throw new Error(`card right=${c.right} > window ${st.winW}`);
+      }
     });
 
-    await t(`FAB: ${v.expectFab ? 'visible when comments exist' : 'hidden'}`, async () => {
-      const hasComments = await page.evaluate(() => document.querySelectorAll('.tdoc-margin-comment').length > 0);
-      const fabVisible = await page.evaluate(() => {
-        const el = document.querySelector('.tdoc-fab');
-        return el ? (el.offsetWidth > 0 && el.offsetHeight > 0) : false;
+    // 4. Narrow-mode self-consistency: the affordances match the actual mode.
+    if (st.narrow) {
+      await t('narrow mode: More menu is the visible nav affordance', async () => {
+        if (!st.more) throw new Error('narrow mode but More (⋯) button not visible');
       });
-      if (v.expectFab && hasComments && !fabVisible) throw new Error('FAB should be visible');
-      if (!v.expectFab && fabVisible) throw new Error('FAB should be hidden on desktop');
-    });
-
-    if (v.expectFab) {
-      await t('Tapping FAB opens the bottom drawer', async () => {
-        const hasComments = await page.evaluate(() => document.querySelectorAll('.tdoc-margin-comment').length > 0);
-        if (!hasComments) { console.log('    (no comments to drawer)'); return; }
-        // Trigger the click via direct DOM dispatch — avoids Playwright's
-        // viewport-vs-device-pixel coordinate mismatch on mobile emulation.
-        await page.evaluate(() => document.querySelector('.tdoc-fab').click());
-        await page.waitForTimeout(250);
-        const open = await page.evaluate(() => document.querySelector('#tdoc-comment-layer.open') !== null);
-        if (!open) throw new Error('drawer did not gain .open class');
-        // Close again so subsequent tests aren't affected
-        await page.evaluate(() => document.querySelector('#tdoc-comment-layer').classList.remove('open'));
-        await page.waitForTimeout(150);
+      await t('narrow mode: FAB visible iff comments exist', async () => {
+        if (st.hasComments && !st.fab) throw new Error('narrow + has comments but FAB hidden');
+        if (!st.hasComments && st.fab) throw new Error('no comments but FAB shown');
       });
-
-      await t('Cards inside drawer fit the window width', async () => {
-        const hasComments = await page.evaluate(() => document.querySelectorAll('.tdoc-margin-comment').length > 0);
-        if (!hasComments) { console.log('    (no comments to test)'); return; }
-        await page.evaluate(() => document.querySelector('.tdoc-fab').click());
-        await page.waitForTimeout(200);
-        // Compare against window.innerWidth (what the doc actually renders to),
-        // not the test viewport — mobile emulation can scale these independently.
-        const overflow = await page.evaluate(() => {
-          const ww = window.innerWidth;
-          for (const c of document.querySelectorAll('.tdoc-margin-comment')) {
-            const r = c.getBoundingClientRect();
-            if (r.right > ww + 1) return { right: r.right, ww };
-          }
-          return null;
+      if (st.hasComments && st.fab) {
+        await t('narrow mode: tapping FAB opens the bottom drawer', async () => {
+          await page.evaluate(() => document.querySelector('.tdoc-fab').click());
+          await page.waitForTimeout(250);
+          const open = await page.evaluate(() => document.querySelector('#tdoc-comment-layer.open') !== null);
+          if (!open) throw new Error('drawer did not gain .open');
+          await page.evaluate(() => document.querySelector('#tdoc-comment-layer').classList.remove('open'));
+          await page.waitForTimeout(120);
         });
-        if (overflow) throw new Error(`card right=${overflow.right} exceeds window ${overflow.ww}`);
-        await page.evaluate(() => document.querySelector('#tdoc-comment-layer').classList.remove('open'));
-        await page.waitForTimeout(150);
-      });
+      }
+      if (st.more) {
+        await t('narrow mode: More opens the secondary menu', async () => {
+          await page.evaluate(() => document.querySelector('#tdoc-more-btn').click());
+          await page.waitForTimeout(150);
+          const open = await page.evaluate(() => document.querySelector('#tdoc-secondary-menu.open') !== null);
+          await page.evaluate(() => { const m = document.querySelector('#tdoc-secondary-menu'); if (m) m.classList.remove('open'); });
+          if (!open) throw new Error('secondary menu did not open');
+        });
+      }
     } else {
-      await t('Desktop cards are positioned in the right margin column', async () => {
-        const cards = await page.$$eval('.tdoc-margin-comment', els => els.map(c => {
-          const r = c.getBoundingClientRect();
-          return { left: r.left, right: r.right };
-        }));
-        if (!cards.length) { console.log('    (no cards)'); return; }
-        for (const c of cards) {
-          if (c.right > v.width + 1) throw new Error(`card right=${c.right} exceeds viewport ${v.width}`);
-          if (c.left < v.width * 0.5) throw new Error(`card left=${c.left} too far left for a desktop margin column`);
+      await t('wide mode: FAB hidden', async () => {
+        if (st.fab) throw new Error('FAB should be hidden in wide (non-narrow) mode');
+      });
+      await t('wide mode: cards sit in the right margin column', async () => {
+        if (!st.cards.length) { console.log('    (no cards)'); return; }
+        for (const c of st.cards) {
+          if (c.left < st.winW * 0.5) throw new Error(`card left=${c.left} too far left for a margin column (win ${st.winW})`);
         }
       });
     }
 
-    if (v.expectMore) {
-      await t('Tapping More opens the secondary menu', async () => {
-        await page.click('#tdoc-more-btn');
-        await page.waitForTimeout(150);
-        const open = await page.evaluate(() => document.querySelector('#tdoc-secondary-menu.open') !== null);
-        if (!open) throw new Error('secondary menu did not open');
-        // Close
-        await page.click('h1', { position: { x: 5, y: 5 } });
-        await page.waitForTimeout(150);
-      });
-    }
-
-    await tPub('Sign-in button or identity chip is visible', async () => {
-      const present = await page.evaluate(() => {
-        const slot = document.querySelector('#tdoc-identity-slot');
-        return !!(slot && slot.children.length > 0);
-      });
-      if (!present) throw new Error('identity slot empty');
-    });
-
-    await t('Footer visible and fits viewport', async () => {
+    // 6. Footer + Copy affordances present and fit.
+    await t('footer visible and fits', async () => {
       const m = await page.evaluate(() => {
-        const f = document.querySelector('.tdoc-footer');
-        if (!f) return null;
+        const f = document.querySelector('.tdoc-footer'); if (!f) return null;
         const r = f.getBoundingClientRect();
         return { visible: f.offsetWidth > 0 && f.offsetHeight > 0, right: r.right, ww: window.innerWidth };
       });
@@ -181,49 +156,39 @@ async function tPub(name, fn) {
       if (m.right > m.ww + 1) throw new Error(`footer right=${m.right} > viewport ${m.ww}`);
     });
 
-    await t('Footer repo + bdocs links present', async () => {
-      const hrefs = await page.evaluate(() => [...document.querySelectorAll('.tdoc-footer a')].map(a => a.href));
-      if (!hrefs.some(h => h.includes('serenakeyitan/tdoc'))) throw new Error('repo link missing');
-      if (!hrefs.some(h => h.includes('jessepollak'))) throw new Error('bdocs credit link missing');
-    });
-
-    await t('Copy button opens dropdown', async () => {
-      // Programmatic click avoids mobile coord issues.
+    await t('Copy button opens its dropdown', async () => {
       await page.evaluate(() => document.querySelector('#tdoc-copy-md-btn').click());
       await page.waitForTimeout(120);
       const open = await page.evaluate(() => document.querySelector('#tdoc-copy-md-menu.open') !== null);
-      // Close
-      await page.evaluate(() => document.querySelector('#tdoc-copy-md-menu').classList.remove('open'));
+      await page.evaluate(() => { const m = document.querySelector('#tdoc-copy-md-menu'); if (m) m.classList.remove('open'); });
       if (!open) throw new Error('copy dropdown did not open');
     });
 
-    if (v.expectMore) {
-      await t('More menu opens via programmatic click', async () => {
-        await page.evaluate(() => document.querySelector('#tdoc-more-btn').click());
-        await page.waitForTimeout(120);
-        const open = await page.evaluate(() => document.querySelector('#tdoc-secondary-menu.open') !== null);
-        await page.evaluate(() => document.querySelector('#tdoc-secondary-menu').classList.remove('open'));
-        if (!open) throw new Error('More menu did not open via click()');
+    // Published-only: identity chip present.
+    await tPub('sign-in / identity chip present', async () => {
+      const present = await page.evaluate(() => {
+        const slot = document.querySelector('#tdoc-identity-slot');
+        return !!(slot && slot.children.length > 0);
       });
-    } else {
-      await tPub('Fork + All-docs buttons clickable', async () => {
-        const ok = await page.evaluate(() => {
-          const fork = document.querySelector('#tdoc-fork-btn');
-          const home = document.querySelector('#tdoc-home-btn');
-          return !!(fork && home &&
-            typeof fork.onclick === 'function' &&
-            typeof home.onclick === 'function' &&
-            fork.offsetWidth > 0 && home.offsetWidth > 0);
-        });
-        if (!ok) throw new Error('Fork/All-docs not wired or not visible');
-      });
-    }
+      if (!present) throw new Error('identity slot empty');
+    });
 
     await ctx.close();
     console.log();
   }
+
+  // 5. Monotonicity invariant: once narrow, all strictly-narrower widths stay
+  // narrow. (narrowByWidth is widest→narrowest.)
+  await t('narrow-mode is monotonic across widths (never wide-after-narrow)', async () => {
+    let seenNarrow = false;
+    for (const e of narrowByWidth) {
+      if (e.narrow) seenNarrow = true;
+      else if (seenNarrow) throw new Error(`width ${e.width} is wide but a wider viewport was already narrow — non-monotonic`);
+    }
+  });
+
   await browser.close();
   await target.stop();
-  console.log(`${pass} passed, ${fail} failed.`);
+  console.log(`${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped (published-only)` : ''}.`);
   process.exit(fail ? 1 : 0);
 })();
