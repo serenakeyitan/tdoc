@@ -1097,6 +1097,196 @@ function requireUploadAuth(req, env) {
   return null;
 }
 
+// ===========================================================================
+// #34 — Per-slug write serialization via a Durable Object.
+//
+// PROBLEM: every comment mutation does get(comments:slug) → JSON.parse → mutate
+// → put(comments:slug) on a single KV value with no compare-and-set. Two
+// concurrent writers each read the same base, append independently, and the
+// second put clobbers the first — a lost update, defeating the append-only log.
+//
+// FIX (Option A — DO owns the writes): all mutations for one slug run INSIDE a
+// single Durable Object instance (idFromName(slug)). Cloudflare guarantees a DO
+// processes requests single-threaded, so same-slug get→mutate→put can't
+// overlap. The race is impossible by construction — no lock, no watchdog, no
+// stuck-lock failure mode.
+//
+// The mutation LOGIC stays in one shared place: applyCommentOp(list, op, ...).
+// Endpoints build a serializable `op` descriptor; the DO replays it atomically.
+// A KV fallback (when the DO binding is absent) keeps the worker functional
+// before/without the migration — same code path, just not serialized.
+// ===========================================================================
+
+// Apply one comment operation to the in-memory list. PURE w.r.t. I/O: it only
+// mutates `list` and returns { status, body }. Both the DO path and the KV
+// fallback call this, so mutation logic is defined exactly once.
+//   op = { kind, ... } — see each endpoint for the shape it builds.
+function applyCommentOp(list, op) {
+  ensureMigrated(list);
+  const now = op.at || new Date().toISOString();
+  switch (op.kind) {
+    case 'create': {
+      const entry = {
+        id: op.id, author: op.author, created: now, created_in: op.version,
+        events: [{ kind: 'created', at_version: op.version, at: now, anchor: op.anchor || null, text: op.text }],
+      };
+      backfillEids(entry.events);
+      list.push(entry);
+      return { status: 200, body: snapshotAt(entry, op.version) };
+    }
+    case 'reply': {
+      const parent = list.find(c => c.id === op.parent_id);
+      if (!parent) return { status: 404, body: { error: 'parent_not_found' } };
+      appendEvent(parent, { kind: 'reply_added', at_version: op.version, at: now,
+        reply: { id: op.reply_id, author: op.author, text: op.text, agent_status: null } });
+      return { status: 200, body: { id: op.reply_id, parent_id: op.parent_id, author: op.author, text: op.text, created: now, version: op.version } };
+    }
+    case 'patch_anchor': {
+      // Authorization is enforced UPSTREAM in the worker (canMutate, which needs
+      // session+env). The DO/applyCommentOp only serializes the write.
+      const target = list.find(c => c.id === op.id);
+      if (!target) return { status: 404, body: { error: 'not_found' } };
+      appendEvent(target, { kind: 'anchor_changed', at_version: op.version, at: now, reset_status: op.reset_status, anchor: op.anchor, by: op.actor && op.actor.login });
+      return { status: 200, body: snapshotAt(target, op.version) };
+    }
+    case 'react': {
+      // The add-vs-remove toggle is computed HERE, inside the serialized write,
+      // from the authoritative freshly-read list — NOT upstream. Computing it in
+      // the worker would reintroduce the exact toggle race #34 fixes (two
+      // concurrent toggles both seeing "not reacted" → double add).
+      let host = list.find(c => c.id === op.comment_id);
+      let isReply = false, replyId = null;
+      if (!host) {
+        for (const c of list) {
+          const reAdded = (c.events || []).find(e => e.kind === 'reply_added' && e.reply?.id === op.comment_id);
+          if (reAdded) { host = c; isReply = true; replyId = op.comment_id; break; }
+        }
+      }
+      if (!host) return { status: 404, body: { error: 'not_found' } };
+      const snap = snapshotAt(host, op.version);
+      if (!snap) return { status: 404, body: { error: 'not_visible_at_version' } };
+      const cur = isReply ? (snap.replies.find(r => r.id === replyId)?.reactions || {}) : snap.reactions;
+      const had = (cur[op.emoji] || []).includes(op.by);
+      const evt = { at_version: op.version, at: now, emoji: op.emoji, by: op.by };
+      if (isReply) { evt.kind = had ? 'reply_reaction_removed' : 'reply_reaction_added'; evt.reply_id = replyId; }
+      else { evt.kind = had ? 'reaction_removed' : 'reaction_added'; }
+      appendEvent(host, evt);
+      const fresh = snapshotAt(host, op.version);
+      const reactions = isReply ? (fresh.replies.find(r => r.id === replyId)?.reactions || {}) : fresh.reactions;
+      return { status: 200, body: { ok: true, reactions } };
+    }
+    case 'delete': {
+      // Authorization enforced upstream (worker resolves target + canMutate
+      // before building this op). The DO only serializes the soft-delete write.
+      const top = list.find(c => c.id === op.id);
+      if (top) {
+        appendEvent(top, { kind: 'deleted', at_version: op.version, at: now, by: op.actor.login });
+        return { status: 200, body: { ok: true } };
+      }
+      for (const c of list) {
+        ensureEventLog(c);
+        const re = (c.events || []).find(e => e.kind === 'reply_added' && e.reply?.id === op.id);
+        if (re) {
+          appendEvent(c, { kind: 'reply_deleted', at_version: op.version, at: now, reply_id: op.id, by: op.actor.login });
+          return { status: 200, body: { ok: true } };
+        }
+      }
+      return { status: 404, body: { error: 'not_found' } };
+    }
+    case 'raw_events': {
+      // pre-built events array to append to a specific comment (agent/reply path)
+      const target = list.find(c => c.id === op.id);
+      if (!target) return { status: 404, body: { error: 'not_found' } };
+      for (const ev of op.events) appendEvent(target, ev);
+      return { status: 200, body: op.responseBody || { ok: true } };
+    }
+    case 'wipe': {
+      // Admin: drop ALL comments for the slug. Serialized through the DO so it
+      // can't race a concurrent mutation into a nondeterministic final state.
+      // Signals the DO to delete the key (handled specially in the DO/fallback).
+      return { status: 200, body: { ok: true, deleted: list.length }, __wipe: true };
+    }
+    case 'publish_merge': {
+      // Publish-time: non-destructively merge tdoc-publish's local comments
+      // (add by id only if absent — never overwrite/delete worker comments),
+      // then reconcile anchors against the new artifact set + compact. Same
+      // logic the upload handler used inline; now serialized through the DO.
+      let merged = 0;
+      if (Array.isArray(op.localComments) && op.localComments.length) {
+        const have = new Set(list.map(c => c && c.id).filter(Boolean));
+        for (const lc of op.localComments) {
+          if (!lc || !lc.id || have.has(lc.id)) continue;
+          ensureEventLog(lc);
+          list.push(lc);
+          have.add(lc.id);
+          merged++;
+        }
+      }
+      if (list.length) {
+        reconcileAnchors(list, op.aids || [], op.version);
+        compactComments(list);
+      }
+      return { status: 200, body: { mergedComments: merged } };
+    }
+    default:
+      return { status: 400, body: { error: 'unknown_op' } };
+  }
+}
+
+// Run a comment mutation for `slug`, serialized per-slug when the DO binding
+// exists. Returns { status, body }. The `op` must be JSON-serializable.
+async function mutateComments(env, slug, op) {
+  if (env.COMMENTS) {
+    const id = env.COMMENTS.idFromName(slug);
+    const stub = env.COMMENTS.get(id);
+    const r = await stub.fetch('https://do/mutate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug, op }),
+    });
+    return r.json();
+  }
+  // Fallback (no DO binding yet): direct KV read-modify-write. NOT serialized —
+  // same behavior as before the migration, so the worker still works if the DO
+  // migration hasn't been applied.
+  const cKey = `comments:${slug}`;
+  const raw = await env.META.get(cKey);
+  const list = raw ? JSON.parse(raw) : [];
+  const res = applyCommentOp(list, op);
+  if (res.status === 200) {
+    if (res.__wipe) await env.META.delete(cKey);
+    else await env.META.put(cKey, JSON.stringify(list));
+  }
+  const { __wipe, ...clean } = res;
+  return clean;
+}
+
+// The Durable Object: single-threaded owner of one slug's comment list. Every
+// mutation for that slug funnels through one instance, so get→mutate→put is
+// atomic and concurrent writers serialize instead of clobbering.
+export class CommentsStore {
+  constructor(state, env) { this.state = state; this.env = env; }
+  async fetch(req) {
+    let payload;
+    try { payload = await req.json(); } catch { return Response.json({ status: 400, body: { error: 'bad_request' } }); }
+    const { slug, op } = payload;
+    const cKey = `comments:${slug}`;
+    // blockConcurrencyWhile serializes even the read-modify-write across the
+    // (rare) case of overlapping awaits inside this instance.
+    return this.state.blockConcurrencyWhile(async () => {
+      const raw = await this.env.META.get(cKey);
+      const list = raw ? JSON.parse(raw) : [];
+      const res = applyCommentOp(list, op);
+      if (res.status === 200) {
+        if (res.__wipe) await this.env.META.delete(cKey);
+        else await this.env.META.put(cKey, JSON.stringify(list));
+      }
+      const { __wipe, ...clean } = res;
+      return Response.json(clean);
+    });
+  }
+}
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -1349,11 +1539,14 @@ export default {
       if (!slug) return json({ error: 'slug required' }, { status: 400 });
       const raw = await env.META.get(`comments:${slug}`);
       const list = raw ? JSON.parse(raw) : [];
-      // Lazy migrate any legacy records on first touch so future endpoints
-      // can assume events[] exists. Persist only if anything changed.
-      if (ensureMigrated(list)) {
-        await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      }
+      // Migrate legacy records IN MEMORY for this response only. We must NOT
+      // persist from a read: a GET get-migrate-put runs outside the per-slug DO,
+      // so a concurrent DO mutation could be clobbered by GET writing back its
+      // stale-but-migrated copy (lost update — exactly what #34 prevents).
+      // Persistence of the migrated shape happens on the next WRITE, which goes
+      // through applyCommentOp (it calls ensureMigrated before the serialized
+      // put). Reads always present migrated data; disk converges on next write.
+      ensureMigrated(list);
       const V = parseVersionParam(url);
       // `?version=all` returns every comment across all versions (lossless,
       // used by tdoc-pull). A numeric/absent version returns that version's
@@ -1368,35 +1561,17 @@ export default {
       try { body = await req.json(); } catch {}
       const { slug, version, anchor, text: commentText, parent_id } = body;
       if (!slug || !commentText) return json({ error: 'slug and text required' }, { status: 400 });
-      const raw = await env.META.get(`comments:${slug}`);
-      const list = raw ? JSON.parse(raw) : [];
-      ensureMigrated(list);
       const author = { login: s.login, avatar_url: s.avatar_url, name: s.name };
       const created = new Date().toISOString();
       const V = Number(version) || 1;
-
-      if (parent_id) {
-        // Reply: append `reply_added` event on the parent.
-        const parent = list.find(c => c.id === parent_id);
-        if (!parent) return json({ error: 'parent_not_found' }, { status: 404 });
-        const replyId = `r_${Date.now()}_${rand(4)}`;
-        appendEvent(parent, {
-          kind: 'reply_added', at_version: V, at: created,
-          reply: { id: replyId, author, text: commentText, agent_status: null },
-        });
-        await env.META.put(`comments:${slug}`, JSON.stringify(list));
-        return json({ id: replyId, parent_id, author, text: commentText, created, version: V });
-      }
-
-      const id = `c_${Date.now()}_${rand(4)}`;
-      const entry = {
-        id, author, created, created_in: V,
-        events: [{ kind: 'created', at_version: V, at: created, anchor: anchor || null, text: commentText }],
-      };
-      backfillEids(entry.events); // stamp eid before persisting (convergence)
-      list.push(entry);
-      await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      return json(snapshotAt(entry, V));
+      // Serialized through the per-slug DO (mutation logic lives once in
+      // applyCommentOp). create + reply are both id-stamped here so the
+      // response is deterministic regardless of where the write runs.
+      const op = parent_id
+        ? { kind: 'reply', slug, parent_id, reply_id: `r_${Date.now()}_${rand(4)}`, author, text: commentText, version: V, at: created }
+        : { kind: 'create', slug, id: `c_${Date.now()}_${rand(4)}`, author, text: commentText, anchor: anchor || null, version: V, at: created };
+      const res = await mutateComments(env, slug, op);
+      return json(res.body, { status: res.status });
     }
 
     // Re-anchor a comment. Only the original author can re-anchor their own
@@ -1409,21 +1584,20 @@ export default {
       try { body = await req.json(); } catch {}
       const { slug, id, anchor, version } = body;
       if (!slug || !id || !anchor) return json({ error: 'slug, id, anchor required' }, { status: 400 });
-      const raw = await env.META.get(`comments:${slug}`);
-      const list = raw ? JSON.parse(raw) : [];
-      ensureMigrated(list);
-      const target = list.find(c => c.id === id);
+      // Auth read (canMutate needs session+env): resolve the target up front.
+      // The serialized write then runs through the DO. A target deleted between
+      // this check and the write is harmless — applyCommentOp returns 404.
+      const authRaw = await env.META.get(`comments:${slug}`);
+      const authList = authRaw ? JSON.parse(authRaw) : [];
+      ensureMigrated(authList);
+      const target = authList.find(c => c.id === id);
       if (!target) return json({ error: 'not_found' }, { status: 404 });
-      if (!canMutate(target, s, env)) {
-        return json({ error: 'not_author' }, { status: 403 });
-      }
+      if (!canMutate(target, s, env)) return json({ error: 'not_author' }, { status: 403 });
       const V = Number(version) || target.created_in || 1;
-      appendEvent(target, {
-        kind: 'anchor_changed', at_version: V, at: new Date().toISOString(),
-        anchor, reset_status: true, by: s.login,
+      const res = await mutateComments(env, slug, {
+        kind: 'patch_anchor', slug, id, anchor, reset_status: true, version: V, actor: { login: s.login },
       });
-      await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      return json(snapshotAt(target, V));
+      return json(res.body, { status: res.status });
     }
 
     // Admin: wipe ALL comments for a slug (doc owner only — uses the same
@@ -1436,10 +1610,9 @@ export default {
       if (unauth) return unauth;
       const slug = url.searchParams.get('slug');
       if (!slug) return json({ error: 'slug required' }, { status: 400 });
-      const raw = await env.META.get(`comments:${slug}`);
-      const before = raw ? JSON.parse(raw).length : 0;
-      await env.META.delete(`comments:${slug}`);
-      return json({ ok: true, deleted: before });
+      // Serialized wipe (through the DO) so it can't race a concurrent mutation.
+      const res = await mutateComments(env, slug, { kind: 'wipe', slug });
+      return json(res.body, { status: res.status });
     }
     // Soft-delete: append a `deleted` event at the current version. The
     // record is preserved; older versions still see the comment as it was.
@@ -1452,40 +1625,36 @@ export default {
       const slug = url.searchParams.get('slug');
       const id = url.searchParams.get('id');
       if (!slug || !id) return json({ error: 'slug and id required' }, { status: 400 });
-      const raw = await env.META.get(`comments:${slug}`);
-      const list = raw ? JSON.parse(raw) : [];
-      ensureMigrated(list);
       const V = parseVersionParam(url);
       const stampVersion = Number.isFinite(V) ? V : 999999;  // "forever" if unspecified
-
-      // Top-level?
-      const top = list.find(c => c.id === id);
+      // Auth read up front (canMutate needs session+env): find the target
+      // (top-level OR reply) and verify the actor can delete it. The serialized
+      // soft-delete write then runs through the DO; a target removed in between
+      // is harmless (applyCommentOp returns 404).
+      const authRaw = await env.META.get(`comments:${slug}`);
+      const authList = authRaw ? JSON.parse(authRaw) : [];
+      ensureMigrated(authList);
+      let authorized = false;
+      const top = authList.find(c => c.id === id);
       if (top) {
-        if (!canMutate(top, s, env)) {
-          return json({ error: 'not_author' }, { status: 403 });
+        if (!canMutate(top, s, env)) return json({ error: 'not_author' }, { status: 403 });
+        authorized = true;
+      } else {
+        for (const c of authList) {
+          ensureEventLog(c);
+          const reply = (c.events || []).find(e => e.kind === 'reply_added' && e.reply && e.reply.id === id);
+          if (reply) {
+            if (!canMutate(reply.reply, s, env)) return json({ error: 'not_author' }, { status: 403 });
+            authorized = true;
+            break;
+          }
         }
-        appendEvent(top, {
-          kind: 'deleted', at_version: stampVersion, at: new Date().toISOString(), by: s.login,
-        });
-        await env.META.put(`comments:${slug}`, JSON.stringify(list));
-        return json({ ok: true });
       }
-      // Reply?
-      for (const c of list) {
-        ensureEventLog(c);
-        const reply = (c.events || []).find(e => e.kind === 'reply_added' && e.reply && e.reply.id === id);
-        if (!reply) continue;
-        if (!canMutate(reply.reply, s, env)) {
-          return json({ error: 'not_author' }, { status: 403 });
-        }
-        appendEvent(c, {
-          kind: 'reply_deleted', at_version: stampVersion, at: new Date().toISOString(),
-          reply_id: id, by: s.login,
-        });
-        await env.META.put(`comments:${slug}`, JSON.stringify(list));
-        return json({ ok: true });
-      }
-      return json({ error: 'not_found' }, { status: 404 });
+      if (!authorized) return json({ error: 'not_found' }, { status: 404 });
+      const res = await mutateComments(env, slug, {
+        kind: 'delete', slug, id, version: stampVersion, actor: { login: s.login },
+      });
+      return json(res.body, { status: res.status });
     }
 
     // ---- reactions: toggle emoji on a comment OR reply ----
@@ -1500,49 +1669,14 @@ export default {
       const { slug, comment_id, emoji, version } = body;
       if (!slug || !comment_id || !emoji) return json({ error: 'slug, comment_id, emoji required' }, { status: 400 });
       if (emoji.length > 8 || emoji.length === 0) return json({ error: 'invalid_emoji' }, { status: 400 });
-
-      const raw = await env.META.get(`comments:${slug}`);
-      const list = raw ? JSON.parse(raw) : [];
-      ensureMigrated(list);
       const V = Number(version) || 1;
-
-      // Find the comment (and whether this is a reply) by id.
-      let host = list.find(c => c.id === comment_id);
-      let isReply = false;
-      let replyId = null;
-      if (!host) {
-        for (const c of list) {
-          const reAdded = (c.events || []).find(e => e.kind === 'reply_added' && e.reply?.id === comment_id);
-          if (reAdded) { host = c; isReply = true; replyId = comment_id; break; }
-        }
-      }
-      if (!host) return json({ error: 'not_found' }, { status: 404 });
-
-      // Determine current state of THIS user's reaction at version V by folding.
-      const snap = snapshotAt(host, V);
-      if (!snap) return json({ error: 'not_visible_at_version' }, { status: 404 });
-      const currentReactions = isReply
-        ? (snap.replies.find(r => r.id === replyId)?.reactions || {})
-        : snap.reactions;
-      const userHadIt = (currentReactions[emoji] || []).includes(s.login);
-
-      const evt = {
-        at_version: V, at: new Date().toISOString(),
-        emoji, by: s.login,
-      };
-      if (isReply) {
-        evt.kind = userHadIt ? 'reply_reaction_removed' : 'reply_reaction_added';
-        evt.reply_id = replyId;
-      } else {
-        evt.kind = userHadIt ? 'reaction_removed' : 'reaction_added';
-      }
-      appendEvent(host, evt);
-      await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      const fresh = snapshotAt(host, V);
-      const reactions = isReply
-        ? (fresh.replies.find(r => r.id === replyId)?.reactions || {})
-        : fresh.reactions;
-      return json({ ok: true, reactions });
+      // No upstream read: the toggle (add vs remove) is decided inside the
+      // serialized write so concurrent toggles can't both add. Any signed-in
+      // user may react, so there's no author check to do here.
+      const res = await mutateComments(env, slug, {
+        kind: 'react', slug, comment_id, emoji, by: s.login, version: V,
+      });
+      return json(res.body, { status: res.status });
     }
 
     // ---- agent reply (from `tdoc edit` after applying a comment) ----
@@ -1560,10 +1694,14 @@ export default {
       const { slug, parent_id, text: replyText, status: agentStatus, applied_in,
               bind_anchor_aid } = body;
       if (!slug || !parent_id || !replyText) return json({ error: 'slug, parent_id, text required' }, { status: 400 });
-      const raw = await env.META.get(`comments:${slug}`);
-      const list = raw ? JSON.parse(raw) : [];
-      ensureMigrated(list);
-      const parent = list.find(c => c.id === parent_id);
+      // Resolve parent + its current anchor up front (the optional rebind needs
+      // the folded anchor for label/fallback). agent/reply is upload-token-authed
+      // (owner-only), so concurrency here is negligible; the serialized write
+      // still funnels through the DO so it can't clobber a concurrent user write.
+      const authRaw = await env.META.get(`comments:${slug}`);
+      const authList = authRaw ? JSON.parse(authRaw) : [];
+      ensureMigrated(authList);
+      const parent = authList.find(c => c.id === parent_id);
       if (!parent) return json({ error: 'parent_not_found' }, { status: 404 });
 
       const verdict = ['applied', 'partial', 'question'].includes(agentStatus) ? agentStatus : null;
@@ -1571,55 +1709,29 @@ export default {
       const now = new Date().toISOString();
       const replyId = `r_${Date.now()}_${rand(4)}`;
 
-      appendEvent(parent, {
+      const events = [{
         kind: 'reply_added', at_version: V, at: now,
-        reply: {
-          id: replyId,
-          author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
-          text: replyText,
-          agent_status: verdict,
-        },
-      });
+        reply: { id: replyId, author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null }, text: replyText, agent_status: verdict },
+      }];
       if (verdict === 'applied') {
-        appendEvent(parent, {
-          kind: 'marked_applied', at_version: V, at: now,
-          applied_in: V, by: 'tdoc-agent', agent_status: 'applied',
-        });
+        events.push({ kind: 'marked_applied', at_version: V, at: now, applied_in: V, by: 'tdoc-agent', agent_status: 'applied' });
       } else if (verdict === 'partial' || verdict === 'question') {
-        // Surface the verdict as an open-status event (carries the emoji
-        // synthetically through snapshotAt) so cards show 🟡/❓ on the parent.
-        appendEvent(parent, {
-          kind: 'marked_open', at_version: V, at: now,
-          by: 'tdoc-agent', agent_status: verdict,
-        });
+        events.push({ kind: 'marked_open', at_version: V, at: now, by: 'tdoc-agent', agent_status: verdict });
       }
-      // Optional anchor rebind from the agent — emits a real anchor_changed.
       if (bind_anchor_aid && typeof bind_anchor_aid === 'string') {
-        // Carry forward any prior label/fallback so the new anchor shape
-        // mirrors what an author re-anchor would produce.
         const cur = snapshotAt(parent, V) || {};
         const fallback = cur.anchor?.fallback;
         const label = cur.anchor?.label || 'svg';
-        appendEvent(parent, {
-          kind: 'anchor_changed', at_version: V, at: now, by: 'tdoc-agent',
-          reset_status: false,
-          anchor: {
-            kind: 'element',
-            aid: bind_anchor_aid,
-            selector: `[data-tdoc-aid="${bind_anchor_aid}"]`,
-            label,
-            ...(fallback ? { fallback } : {}),
-          },
+        events.push({
+          kind: 'anchor_changed', at_version: V, at: now, by: 'tdoc-agent', reset_status: false,
+          anchor: { kind: 'element', aid: bind_anchor_aid, selector: `[data-tdoc-aid="${bind_anchor_aid}"]`, label, ...(fallback ? { fallback } : {}) },
         });
       }
-      await env.META.put(`comments:${slug}`, JSON.stringify(list));
-      // Return shape matches the pre-rewrite payload (a reply object) for
-      // backwards-compat with `tdoc edit` callers.
-      return json({
-        id: replyId, parent_id, text: replyText,
-        author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
-        agent_status: verdict, created: now, reactions: {},
+      const res = await mutateComments(env, slug, {
+        kind: 'raw_events', slug, id: parent_id, events,
+        responseBody: { id: replyId, parent_id, text: replyText, author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null }, agent_status: verdict, created: now, reactions: {} },
       });
+      return json(res.body, { status: res.status });
     }
 
     // ---- admin upload (from `tdoc publish`) ----
@@ -1659,18 +1771,13 @@ export default {
       // agent honesty required, no silent re-anchoring to wrong artifacts.
       let mergedLocal = 0;
       try {
-        const cKey = `comments:${slug}`;
-        const raw = await env.META.get(cKey);
-        const list = raw ? JSON.parse(raw) : [];
-        const before = JSON.stringify(list);
-
-        // #24 dry-run: measure (don't mutate) how many live comments anchor to
-        // an aid that the hardened parser changes vs the legacy parser. If this
-        // is ever > 0 on a real doc, that doc needs the aid migration from
-        // docs/DESIGN-aid-migration.md before its anchors are safe. Visible via
-        // `wrangler tail`. Empirically 0 across current docs.
+        // #24 dry-run (read-only logging): measure how many live comments anchor
+        // to an aid the hardened parser changes vs the legacy parser. >0 on a
+        // real doc → that doc needs the aid migration in docs/DESIGN-aid-
+        // migration.md. Reads its own copy, never mutates. Empirically 0.
         try {
-          const drift = measureAidDrift(doc, list);
+          const dr = await env.META.get(`comments:${slug}`);
+          const drift = measureAidDrift(doc, dr ? JSON.parse(dr) : []);
           if (drift.affectedComments > 0) {
             console.warn(`[aid-drift] slug=${slug} v=${version} changedAids=${drift.changed} affectedComments=${drift.affectedComments} samples=${JSON.stringify(drift.samples)} — these anchors will rebind via reconcile; see docs/DESIGN-aid-migration.md`);
           } else {
@@ -1680,30 +1787,13 @@ export default {
           console.error('[aid-drift] measurement failed (non-fatal):', e.message);
         }
 
-        // Merge locally-authored comments (sent by tdoc-publish) NON-
-        // DESTRUCTIVELY: add a local comment only if its id is not already on
-        // the worker. Worker-side comments (authored by real published
-        // commenters) are never deleted or overwritten. Idempotent — re-
-        // publishing the same local set adds nothing. This is the mirror of
-        // tdoc-pull's merge, so local↔worker round-trips converge.
-        if (Array.isArray(localComments) && localComments.length) {
-          const have = new Set(list.map(c => c && c.id).filter(Boolean));
-          for (const lc of localComments) {
-            if (!lc || !lc.id || have.has(lc.id)) continue;
-            ensureEventLog(lc); // normalize flat local shape → event-log shape
-            list.push(lc);
-            have.add(lc.id);
-            mergedLocal++;
-          }
-        }
-
-        if (list.length) {
-          ensureMigrated(list);
-          reconcileAnchors(list, aids, version);
-          compactComments(list); // bound KV growth: collapse superseded/dup events
-        }
-        const after = JSON.stringify(list);
-        if (after !== before) await env.META.put(cKey, after);
+        // Serialized merge + reconcile + compact through the per-slug DO. The
+        // merge is non-destructive (add-by-id-if-absent; never overwrite/delete
+        // worker comments), mirroring tdoc-pull so round-trips converge.
+        const res = await mutateComments(env, slug, {
+          kind: 'publish_merge', slug, localComments: localComments || [], aids, version,
+        });
+        mergedLocal = (res.body && res.body.mergedComments) || 0;
       } catch (e) {
         console.error('[upload] comment merge/reconcile failed (non-fatal):', e.message);
       }

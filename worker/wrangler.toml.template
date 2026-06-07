@@ -11,6 +11,20 @@ bucket_name = "tdoc-docs"
 binding = "META"
 id = "PLACEHOLDER_KV_ID"
 
+# Per-slug write serialization (#34). All comment mutations for one slug funnel
+# through one CommentsStore instance (idFromName(slug)), which Cloudflare runs
+# single-threaded — so get→mutate→put can't overlap and concurrent writers
+# can't clobber each other. The DO uses the SAME META KV for storage (no data
+# migration); it's purely a serialization gate. If this binding is removed the
+# worker falls back to direct KV writes (functional, just not serialized).
+[[durable_objects.bindings]]
+name = "COMMENTS"
+class_name = "CommentsStore"
+
+[[migrations]]
+tag = "v1-comments-do"
+new_classes = ["CommentsStore"]
+
 [vars]
 GITHUB_CLIENT_ID = "Ov23liZ1UAGOchvKPmlS"
 # The worker owner's GitHub login. Only this signed-in viewer sees the
