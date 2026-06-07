@@ -23,7 +23,7 @@ class_name = "CommentsStore"
 
 [[migrations]]
 tag = "v1-comments-do"
-new_classes = ["CommentsStore"]
+new_sqlite_classes = ["CommentsStore"]
 
 [vars]
 GITHUB_CLIENT_ID = "Ov23liZ1UAGOchvKPmlS"
