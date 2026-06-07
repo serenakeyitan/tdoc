@@ -37,22 +37,26 @@ This project owes its concept to Jesse Pollak's bdocs at Coinbase. When you add 
 
 ## Tests
 
+A single runner drives everything. Offline suites run by default; browser/network suites are gated.
+
 ```bash
-# fast, no network
-node test/onboarding.test.js   # 13 cases — doctor / install state
-node test/publish.test.js      #  6 cases — local publish flow
-node test/api.test.js          #  8 cases — needs local server running
-
-# Playwright (uses headless Chromium)
-node test/ui.test.js           # 29 cases — overlay, popup, comments
-node test/responsive.test.js   # 15 cases — viewport widths
-
-# full integration (real Cloudflare round-trip)
-TDOC_INTEGRATION=1 node test/onboarding.test.js
+npm test            # all offline suites — no network, no browser. Covers:
+                    #   worker comment fold + cross-version history, anchor reconcile,
+                    #   event-log convergence, security (injection/authz/CSRF/path-traversal),
+                    #   P3 hardening (XSS escaping, corrupt-value resilience),
+                    #   CLI resilience, comment ops, aid-stamp parsing, local API (hermetic)
+npm run test:all    # also runs the gated suites:
+                    #   ui.test.js / responsive.test.js  — real browser via Playwright
+                    #       (default: local committed fixture; TDOC_TEST_URL=<url> for a live doc;
+                    #        skip LOUDLY if Playwright isn't installed)
+                    #   publish.test.js / onboarding.test.js — publish + doctor flows
+                    #   TDOC_INTEGRATION=1 → real Cloudflare round-trip
 ```
 
-All tests should pass before any commit to `main`.
+Install the optional browser dep with `npm i -D playwright && npx playwright install chromium`.
+
+`npm test` must be green before any commit to `main`.
 
 ## Hard rule: run tests before every push
 
-The skill ships JS that runs in users' browsers and a worker that runs on Cloudflare. Both are deployed on every `/tdoc publish`. Run the relevant test file before pushing — overlay changes → `ui.test.js`, worker/API changes → `api.test.js`. Doc-only changes still need a `grep` for stale references.
+The skill ships JS that runs in users' browsers and a worker that runs on Cloudflare, both deployed on every `/tdoc publish`. Run `npm test` before pushing; for overlay or worker changes also run the matching gated suite via `npm run test:all`. Doc-only changes still need a `grep` for stale references (counts, command names, version numbers).

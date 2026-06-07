@@ -1,4 +1,4 @@
-# tdoc — google doc, but designed for agents
+# tdoc — Google Docs for markdown, with your agent as collaborator
 
 See it live: https://tdoc.serenatan.workers.dev
 
@@ -34,6 +34,8 @@ And docs made in chat have no version history — every regeneration overwrites 
 
 `tdoc` gives you both sides: humans comment Google-Docs-style on any sentence/image/chart, the agent reads the same comments as structured input, and every edit is a new version you can flip back to. All free, all yours.
 
+Think of it as **Google Docs, but for markdown files and with your agent as a collaborator** — multiplayer comments, comment status that stays in sync, full version history, and a one-line CLI to drive it all.
+
 ## Install
 
 Paste this into Claude Code or Codex:
@@ -67,12 +69,30 @@ Or via the plugin marketplace: `/plugin marketplace add serenakeyitan/tdoc`
 
 ## How comments work
 
+It's the Google-Docs commenting model, built for markdown and wired to your agent:
+
 - **Text**: highlight any sentence (across paragraphs, across bold/links — anchors survive regeneration) → comment popup, cursor ready to type
 - **Artifacts** (img / canvas / svg / video / `<pre>`): hover → "Comment" pill → click
 - **Threads**: emoji reactions (👍 ❤️ 🔥 ✅ ❓ + `LGTM`) and replies; hover a reaction to see who reacted
 - **Move / remove anchor**: drag a comment to new text, or detach it entirely — it stays in the thread
-- **Versions**: a `v3 ▾` picker in the top bar — every version is kept and browsable
-- **Agent replies**: when your agent regenerates from comments, it replies on each with `tdoc-agent` and a status emoji (✅ applied / 🟡 partial / ❓ needs clarification)
+- **Multiplayer**: anyone with the link signs in once with GitHub and comments. Every comment is attributed to its real author, and concurrent commenters never clobber each other (writes are serialized per-doc — see Reliability below).
+- **Status sync**: comments carry a resolved-style status that stays in sync between the web view and your agent — `tdoc-agent` stamps each with ✅ applied / 🟡 partial / ❓ needs clarification when it regenerates, so "what's been addressed" is visible to everyone, live, without re-pinging.
+
+## Version history
+
+Every doc is versioned, and **every version is a full snapshot** — not a diff. You can:
+
+- Flip back to any past version (`/d/<slug>/v/2`); a subtle banner on an older version links you to the latest.
+- Keep commenting on old versions — comments anchored to text that a later version removed are preserved, never silently dropped.
+- Pull the complete cross-version history of comments back to local with `/tdoc pull` (it merges, never overwrites).
+
+This is the "edit history" half of the Google-Docs feeling: nothing you write — doc or comment — gets lost to a regeneration.
+
+## Reliability (what makes the multiplayer part trustworthy)
+
+- **Concurrent comments never lost.** Per-doc comment writes are serialized through a Cloudflare Durable Object, so two people commenting at the same instant both land — no last-write-wins clobber.
+- **Comments survive every regenerate.** When a new version reshuffles the doc, comments re-anchor to their artifact by content identity; if a target genuinely disappears, the comment is shown unanchored ("click to re-anchor") rather than attached to the wrong place.
+- **Untrusted input is escaped.** Comment text, author names, and avatars are HTML-escaped on render — a comment can't inject script into the page.
 - **Auth**: local docs comment anonymously with zero setup. Published docs require a one-time GitHub sign-in (Device Flow, scope `read:user`) before commenting.
 
 ## Requirements
@@ -84,17 +104,33 @@ Or via the plugin marketplace: `/plugin marketplace add serenakeyitan/tdoc`
 
 `/tdoc onboard` checks and installs these for you.
 
+## Roadmap (not built yet)
+
+tdoc today is a **comment + version** surface — humans comment, the agent regenerates. These are wanted but **not yet shipped** (listed here so the feature list above stays honest):
+
+- **Suggestion mode** — propose an inline edit a reviewer can accept/reject, instead of leaving a comment.
+- **Edit mode** — edit the doc text in the browser, not only through the agent.
+- **Collaborative / multi-editor editing** — two people editing the same doc live (today, *commenting* is multiplayer; *editing* is agent-driven and single-writer per regenerate).
+- **Track-changes-style edit history** — version history exists today (full snapshots you can flip between); a per-change diff/track-changes view is the next step.
+
+Want one of these? Open an issue.
+
 ## Testing
 
+The suite runs offline by default; browser and network suites are gated.
+
 ```bash
-node test/ui.test.js                # 29 UI / overlay cases (drag-to-select, popup, comments)
-node test/responsive.test.js        # 15 Playwright viewport cases
-node test/api.test.js               # 8 local-server API cases (requires running server)
-node test/publish.test.js           #  6 publish-flow cases
-node test/onboarding.test.js        # 13 doctor/onboarding cases (mocked)
-TDOC_INTEGRATION=1 node test/onboarding.test.js   # + real Cloudflare round-trip
-node test/dimensions-audit.js       # responsive screenshots across widths
+npm test            # all offline suites (worker logic, comment fold, reconcile,
+                    # security, CLI, P3 hardening — no network, no browser)
+npm run test:all    # also runs the gated suites:
+                    #   ui.test.js / responsive.test.js  — real browser (needs playwright;
+                    #                                       skip loudly if absent)
+                    #   publish.test.js / onboarding.test.js — publish + doctor flows
 ```
+
+Browser suites default to a committed local fixture (so they test the working-tree
+overlay, offline). Point them at a live doc with `TDOC_TEST_URL=<url>`. Install the
+optional browser dep with `npm i -D playwright && npx playwright install chromium`.
 
 ## Telemetry
 
