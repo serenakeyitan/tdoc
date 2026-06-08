@@ -1151,7 +1151,7 @@
       const mine = users.includes(me);
       const hasAgent = users.includes('tdoc-agent');
       const cls = [`tdoc-react-chip`, mine ? 'mine' : '', hasAgent ? 'agent' : ''].filter(Boolean).join(' ');
-      return `<span class="${cls}" data-emoji="${escapeHtml(emoji)}" data-target-id="${escapeHtml(target.id)}" data-users="${users.map(escapeHtml).join('\n')}">${emoji} ${users.length}</span>`;
+      return `<span class="${cls}" data-emoji="${escapeHtml(emoji)}" data-target-id="${escapeHtml(target.id)}" data-users="${users.map(escapeHtml).join('\n')}">${escapeHtml(emoji)} ${users.length}</span>`;
     }).join('');
     return `<div class="tdoc-reactions" data-target-id="${escapeHtml(target.id)}">${chips}<button class="tdoc-react-add" data-target-id="${escapeHtml(target.id)}" title="Add reaction" aria-label="Add reaction">${REACT_ICON_SVG}</button></div>`;
   }

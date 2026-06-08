@@ -1315,21 +1315,25 @@ async function readComments(env, slug) {
 export class CommentsStore {
   constructor(state, env) { this.state = state; this.env = env; }
 
-  // Load the list from DO storage, lazily seeding from KV on first access.
-  async _load(slug) {
-    let list = await this.state.storage.get('list');
+  // Resolve the list for `slug` from DO storage INSIDE transaction txn, doing
+  // the one-time legacy-KV migration on first touch. DO storage is the SOLE
+  // source of truth — there is no KV mirror (Codex P2: a post-commit KV mirror
+  // can finish out of order and silently lose a committed update, and was never
+  // a reliable fallback). Fails CLOSED on a corrupt stored value rather than
+  // silently discarding recoverable data (Codex P2: safeParseList-on-write =
+  // silent loss): an absent KV value is a genuinely empty doc ([]); a
+  // present-but-corrupt one throws so the write is rejected and the bytes are
+  // preserved for recovery.
+  async _loadInTxn(txn, slug) {
+    const list = await txn.get('list');
     if (list === undefined) {
-      // First touch for this DO: migrate the existing KV comments in (or [] ).
       const raw = await this.env.META.get(`comments:${slug}`);
-      list = safeParseList(raw);
-      await this.state.storage.put('list', list);
-    } else if (!Array.isArray(list)) {
-      // Defense-in-depth: a non-array ever in DO storage would crash
-      // applyCommentOp's array ops. Self-heal to [] (logged).
-      console.error('[comments] DO storage value not an array — resetting to []');
-      list = [];
-      await this.state.storage.put('list', list);
+      if (raw == null) return [];                 // empty doc, not corruption
+      let parsed; try { parsed = JSON.parse(raw); } catch { throw new Error('legacy_kv_corrupt'); }
+      if (!Array.isArray(parsed)) throw new Error('legacy_kv_corrupt');
+      return parsed;
     }
+    if (!Array.isArray(list)) throw new Error('do_storage_corrupt'); // fail closed
     return list;
   }
 
@@ -1339,44 +1343,44 @@ export class CommentsStore {
     try { payload = await req.json(); } catch { return Response.json({ list: [] }); }
     const { slug, op } = payload;
 
+    // READ: resolve inside a transaction so a concurrent first-touch mutation
+    // can't commit between a non-transactional get and a write-back (Codex P1:
+    // the old _load() seeded KV→DO storage outside any txn, so a read could
+    // clobber an already-committed mutation). A first-touch migration is
+    // persisted (seeds the canonical store) but only when storage was empty —
+    // never an overwrite. On a corrupt value, return [] for DISPLAY only; the
+    // stored bytes are left intact.
     if (u.pathname === '/read') {
-      const list = await this._load(slug);
+      let list = [];
+      try {
+        await this.state.storage.transaction(async (txn) => {
+          const empty = (await txn.get('list')) === undefined;
+          list = await this._loadInTxn(txn, slug);
+          if (empty) await txn.put('list', list);
+        });
+      } catch { list = []; }
       return Response.json({ list });
     }
 
-    // Atomic read-modify-write via state.storage.transaction(). Per the
-    // Cloudflare docs, transaction() is the correct primitive for RMW during
-    // request handling — storage ops inside it are atomic + isolated, so
-    // concurrent same-slug mutations serialize. Two prior attempts failed:
-    // (1) KV inside the DO wasn't input-gated → lost updates; (2)
-    // blockConcurrencyWhile around the whole handler threw HTTP 500 under
-    // concurrency (it's the documented anti-pattern for request handling). KV
-    // mirroring is done AFTER the transaction commits so non-storage I/O can't
-    // break the transaction's atomicity.
+    // MUTATE: atomic read-modify-write via state.storage.transaction(). Storage
+    // ops inside it are input-gated, so concurrent same-slug mutations
+    // serialize. (Prior attempts failed: KV-inside-DO wasn't gated → lost
+    // updates; blockConcurrencyWhile around the handler 500'd under load.)
     let out;
-    await this.state.storage.transaction(async (txn) => {
-      let list = await txn.get('list');
-      if (list === undefined) {
-        // First-touch migration from the legacy KV value, inside the txn.
-        const raw = await this.env.META.get(`comments:${slug}`);
-        list = safeParseList(raw);
-      } else if (!Array.isArray(list)) {
-        // Self-heal a non-array DO value, and persist the repair NOW (inside the
-        // txn) even if the mutation below fails — so a corrupt value can't
-        // linger and keep 500ing future ops.
-        list = [];
-        await txn.put('list', list);
+    try {
+      await this.state.storage.transaction(async (txn) => {
+        const list = await this._loadInTxn(txn, slug);
+        const res = applyCommentOp(list, op);
+        if (res.status === 200) await txn.put('list', res.__wipe ? [] : list);
+        out = { res };
+      });
+    } catch (e) {
+      // Corrupt stored value → reject the write, preserve the bytes. 409 so the
+      // caller knows it's a recoverable conflict, not a transient 500.
+      if (e && /corrupt/.test(e.message || '')) {
+        return Response.json({ status: 409, error: 'comments_store_corrupt', message: 'stored comments are corrupt; manual recovery required' });
       }
-      const res = applyCommentOp(list, op);
-      if (res.status === 200) await txn.put('list', res.__wipe ? [] : list);
-      out = { res, persist: res.status === 200 ? (res.__wipe ? [] : list) : null, wipe: !!res.__wipe };
-    });
-    // Best-effort KV mirror (backstop; DO storage is canonical), after commit.
-    if (out.persist !== null) {
-      try {
-        if (out.wipe) await this.env.META.delete(`comments:${slug}`);
-        else await this.env.META.put(`comments:${slug}`, JSON.stringify(out.persist));
-      } catch { /* best-effort */ }
+      throw e;
     }
     const { __wipe, ...clean } = out.res;
     return Response.json(clean);
@@ -1468,7 +1472,7 @@ export default {
       const reactionsText = (rs) => {
         if (!rs) return '';
         const parts = Object.entries(rs).filter(([, u]) => u && u.length > 0)
-          .map(([e, u]) => `${e} (${u.length})`);
+          .map(([e, u]) => `${forHtmlComment(e)} (${u.length})`); // escape: a reaction value like '-->' must not break out of the HTML comment
         return parts.length ? `    reactions: ${parts.join(', ')}\n` : '';
       };
       let banner = `<!--
@@ -1829,6 +1833,9 @@ export default {
       try { body = await req.json(); } catch {}
       const { slug, version, html: doc, meta, comments: localComments } = body;
       if (!slug || !version || !doc) return json({ error: 'slug, version, html required' }, { status: 400 });
+      // html must be a string — a non-string doc would throw inside stampAids()
+      // and surface as a generic 500 (Codex P3).
+      if (typeof doc !== 'string') return json({ error: 'html must be a string' }, { status: 400 });
       // Identity-stamp every commentable artifact with a content-hashed
       // data-tdoc-aid. The SAME artifact in a different version has the
       // SAME aid — so a comment anchored by aid resolves identity-first
@@ -1900,6 +1907,11 @@ export default {
         cursor = r.truncated ? r.cursor : undefined;
       } while (cursor);
       await env.META.delete(`meta:${slug}`);
+      // Wipe comments through the DO (the canonical store), not just the KV
+      // mirror (Codex P1: deleting only KV left DO storage populated, so
+      // delete-then-recreate resurrected old comments). The wipe op clears
+      // state.storage; the legacy KV value is removed too as cleanup.
+      await mutateComments(env, slug, { kind: 'wipe' });
       await env.META.delete(`comments:${slug}`);
       return json({ ok: true });
     }
