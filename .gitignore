@@ -21,3 +21,8 @@ yarn-error.log
 
 # Telemetry runtime artifacts (per-user, never commit)
 telemetry/supabase/.temp/
+.gstack/
+
+# Local marketing assets (Twitter cover + Remotion demo video project) — kept
+# local, not version-controlled. NOTE: not backed up to GitHub.
+marketing/
