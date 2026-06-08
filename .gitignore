@@ -8,6 +8,9 @@
 worker/_worker.bundled.js
 worker/wrangler.toml
 
+# Wrangler local cache (created by `wrangler deploy`) — never commit
+worker/.wrangler/
+
 # Editor / OS junk
 .DS_Store
 .vscode/
