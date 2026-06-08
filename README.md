@@ -159,7 +159,7 @@ what breaks, and what to fix next — without guessing.
 |-------------------|--------------------------------------|
 | `ts`              | `2026-05-22T16:32:11Z`               |
 | `skill`           | `tdoc`                               |
-| `skill_version`   | `0.1.66`                             |
+| `skill_version`   | `0.7.6`                              |
 | `event_type`      | `skill_run` / `upgrade_prompted`     |
 | `outcome`         | `success` / `error` / `abandoned`    |
 | `duration_s`      | `87`                                 |
