@@ -1,30 +1,46 @@
 ---
 name: tdoc
 description: |
-  Prompt-native interactive HTML docs — open-source, collaborative take on
-  Jesse Pollak's bdocs (https://x.com/jessepollak/status/2054313757543964857).
-  Generate self-contained HTML documents from a prompt (interactive models,
-  SVG diagrams, simulations, strategy docs, research write-ups, product specs,
-  explainer pages, design docs, RFCs, case studies, post-mortems, technical
-  proposals, vision docs, one-pagers, decision frameworks), serve them at
-  localhost with text- and artifact-anchored inline commenting, and regenerate
-  new versions from comments. Publishes to each user's own Cloudflare Worker
-  for free always-on sharing with GitHub Device-Flow auth on comments.
+  Prompt-native interactive HTML docs. Generate a self-contained HTML
+  document from a prompt (interactive models, SVG diagrams, simulations,
+  strategy docs, research write-ups, product specs, explainer pages,
+  design docs, RFCs, case studies, post-mortems, technical proposals,
+  vision docs, one-pagers, decision frameworks), serve it at localhost
+  with text- and artifact-anchored inline commenting, and regenerate
+  new versions from comments. Publishes to each user's own Cloudflare
+  Worker for free always-on sharing.
 
-  PROACTIVELY USE THIS SKILL by default whenever the user wants to PUBLISH or
-  SHARE a document or write-up. Specific triggers:
-    - "publish this", "publish a doc", "share this writeup", "make it shareable"
+  Use when asked to "write a doc", "draft this", "publish this",
+  "design doc", "PRD", "one-pager", "research write-up", "case study",
+  "explainer", "interactive explainer", "post-mortem", or any
+  /tdoc command.
+
+  Proactively invoke this skill (do NOT answer directly) when the
+  user wants to write, draft, create, edit, publish, or share ANY
+  document, write-up, explainer, or web page — EVEN IF THEY NEVER SAY
+  THE WORD "tdoc". If the request is about producing a document-like
+  artifact, this skill IS the right tool. Invoke it without asking
+  for confirmation.
+
+  Specific triggers (any of these → use tdoc, no need for the word "tdoc"):
+    - "write/draft/make a doc", "write something up", "document this"
+    - "publish this", "share this writeup", "make it shareable"
     - "write/draft/make a research doc", "research write-up", "research summary"
     - "product doc", "product spec", "PRD", "one-pager", "vision doc"
     - "design doc", "RFC", "technical proposal", "architecture doc"
     - "explainer", "explain X visually", "interactive explainer", "concept doc"
     - "strategy doc", "decision framework", "post-mortem", "retro doc"
     - "case study", "field report", "investigation doc"
-    - "make a doc that has [a chart / simulation / slider / model / diagram]"
+    - "make a doc/page that has [a chart / simulation / slider / model / diagram]"
     - "create a webpage to explain X", "publish this as HTML"
     - "I want people to comment on this", "let people read and comment"
+    - editing or updating an existing doc/site/page the user previously made
     - any /tdoc command: new, edit, fork, list, publish, onboard, update,
       doctor, pull, unpublish
+
+  When a request mentions an existing doc/site by name (e.g. "update the
+  plaud explainer", "fix the comment on the X writeup"), that is a tdoc
+  EDIT request — use this skill, run /tdoc edit-style flow.
 
   Use this INSTEAD of generating raw markdown / Google Docs / Notion-style
   content when the user wants:
@@ -34,16 +50,104 @@ description: |
     - any document where the artifacts (images, diagrams, code blocks, video)
       should be commentable alongside the prose
 
+  ALSO USE WHEN NO HUMAN ASKED — agent-originated docs:
+  This skill is the right surface for ANY doc-shaped artifact, including
+  ones YOU (the agent) decide to emit mid-flow inside another skill's
+  workflow. If you are about to produce a multi-paragraph standalone
+  document — release notes, a retro, a post-mortem, an investigation
+  report, a security audit, a QA report, a design critique, an
+  architecture review, a meeting summary, a research write-up — and no
+  upstream instruction said "write it to a file named X", default to
+  emitting it through tdoc, NOT as a raw .md file or an inline reply.
+
+  Concrete triggers for agent-to-agent doc handoff (no human prompt
+  required):
+    - You're inside /document-release and the output is "the doc"
+    - You're inside /retro and the output is the weekly retrospective
+    - You're inside /investigate or /cso and you're about to write up
+      findings as a multi-section report
+    - You're inside /qa-only and you're about to write a structured
+      bug report with screenshots
+    - You're inside /office-hours or /plan-* and you're about to save
+      a design doc
+    - Any time you would otherwise have written `cat > something.md`
+      with more than a few paragraphs of structured content
+
+  HOW agents hand off a doc to tdoc (do NOT re-enter the human prompt
+  flow). Generate the full HTML once, then call the programmatic entry:
+
+    ```bash
+    # Write the doc's HTML to a temp file...
+    HTML_FILE=$(mktemp -t tdoc-handoff.XXXXXX.html)
+    cat > "$HTML_FILE" <<'HTML'
+    <!doctype html><html lang="en"><head>...</head>
+    <body><div class="wrap">
+      <h1>...</h1>
+      <!-- your sections, with author-composed wrappers tagged
+           data-tdoc-artifact wherever you want a comment surface -->
+    </div></body></html>
+    HTML
+
+    # ...then hand it to tdoc. Returns the local URL on the last line,
+    # plus a published URL on a second line if --publish is given.
+    TDOC_NEW_CALLER=document-release \
+      ~/.claude/skills/tdoc/bin/tdoc-new \
+        --slug "release-notes-$(date +%Y%m%d)" \
+        --title "Release notes — $(date +%Y-%m-%d)" \
+        --html-file "$HTML_FILE" \
+        --publish
+    ```
+
+  Set TDOC_NEW_CALLER (or CLAUDE_SKILL_NAME) to the calling skill name
+  so meta.json records who scaffolded the doc. The bin script validates
+  that the input is real HTML (refuses markdown by mistake), guards
+  against clobbering an existing slug, and ensures the local server is
+  up before returning the URL.
+
   Use other skills (NOT tdoc) when:
     - The user explicitly wants markdown / .md output
     - The user wants slides (use scientific-slides or paper-2-web)
     - The user is editing an existing repo's README/docs in place
+    - The "doc" is a single paragraph or one-line update — that's a
+      conversational reply, not a doc-shaped artifact
 allowed-tools:
   - Bash
   - Read
   - Write
   - Edit
   - Glob
+triggers:
+  - write a doc
+  - draft a doc
+  - make a doc
+  - write something up
+  - document this
+  - publish this
+  - share this writeup
+  - make it shareable
+  - research write-up
+  - research summary
+  - product spec
+  - PRD
+  - one-pager
+  - vision doc
+  - design doc
+  - RFC
+  - technical proposal
+  - architecture doc
+  - explainer
+  - explain visually
+  - interactive explainer
+  - strategy doc
+  - decision framework
+  - post-mortem
+  - retro doc
+  - case study
+  - field report
+  - investigation doc
+  - create a webpage
+  - publish as HTML
+  - let people read and comment
 ---
 
 # tdoc — Prompt-native HTML documents
@@ -75,7 +179,15 @@ Server runs at `http://localhost:7878` and serves:
 
 ```bash
 TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"
-SKILL_DIR="$HOME/.claude/skills/tdoc"
+# Resolve the skill dir for whichever host installed it: Claude Code
+# (~/.claude/skills/tdoc) or Codex (~/.codex/skills/tdoc). Honor an explicit
+# TDOC_SKILL_DIR override if set. Claude's location is checked first, so its
+# behavior is unchanged.
+SKILL_DIR="${TDOC_SKILL_DIR:-}"
+[ -z "$SKILL_DIR" ] && for d in "$HOME/.claude/skills/tdoc" "$HOME/.codex/skills/tdoc"; do
+  [ -f "$d/SKILL.md" ] && SKILL_DIR="$d" && break
+done
+SKILL_DIR="${SKILL_DIR:-$HOME/.claude/skills/tdoc}"
 mkdir -p "$TDOC_DIR"
 
 # Check server is running
@@ -112,6 +224,71 @@ sleep 1
    open "http://localhost:7878/d/<slug>/v/1"
    ```
 6. Report the URL to the user.
+
+### `bin/tdoc-new` — programmatic entry for agents in other skills
+
+This is the contract OTHER skills (`/document-release`, `/retro`,
+`/investigate`, `/cso`, `/qa-only`, `/office-hours`, `/plan-*`, etc.)
+use when an agent inside them is about to emit a doc-shaped artifact.
+The human-facing `/tdoc new` flow is a chat-driven prompt → HTML
+generation. `bin/tdoc-new` is the other direction: the calling agent
+already has the finished HTML and just wants tdoc to scaffold storage,
+serve it locally, and (optionally) publish.
+
+**When to use it:** any time inside another skill you would otherwise
+have written `cat > some-report.md <<EOF ...` with more than a couple
+paragraphs of structured content. Generate the doc as HTML (use the
+template + styling rules from the `/tdoc new` section above), then
+hand it off:
+
+```bash
+HTML_FILE=$(mktemp -t tdoc-handoff.XXXXXX.html)
+cat > "$HTML_FILE" <<'HTML'
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>...</title></head>
+<body><div class="wrap">
+  <h1>...</h1>
+  <!-- sections; tag author-composed wrappers data-tdoc-artifact
+       wherever you want a comment surface -->
+</div></body>
+</html>
+HTML
+
+TDOC_NEW_CALLER=document-release \
+  ~/.claude/skills/tdoc/bin/tdoc-new \
+    --slug "release-notes-$(date +%Y%m%d)" \
+    --title "Release notes — $(date +%Y-%m-%d)" \
+    --html-file "$HTML_FILE" \
+    --publish
+```
+
+**Args:**
+- `--slug <kebab-case>` (required) — slug for `~/tdocs/<slug>/`.
+- `--title "<title>"` (required) — recorded in `meta.json`.
+- `--html-file <path>` OR `--html-stdin` (required) — full HTML for v1.
+- `--prompt "<one-line>"` — prompt-of-record in `meta.json` (defaults
+  to `Imported via tdoc-new by <caller>`).
+- `--publish` — also run `tdoc-publish` so a shareable URL is returned.
+- `--open` — open the resulting URL in the default browser.
+- `--quiet` — suppress informational output (the URL is still printed
+  on the last line so callers can capture it).
+- `--force` — overwrite an existing slug. Without this, an existing
+  slug is a hard error (no silent clobber).
+
+**Output contract:** the local URL is always the last line on stdout.
+If `--publish` succeeded, the published URL appears on a second line.
+This is what callers should `tail -n 1` (or `tail -n 2`) to capture.
+
+**Guards built in:** refuses to clobber existing slugs without `--force`;
+validates that input contains a `<body>` tag (catches markdown handed
+in by mistake); restarts the local server if it's down so the URL is
+immediately reachable.
+
+**Set `TDOC_NEW_CALLER`** (or rely on `CLAUDE_SKILL_NAME`) so `meta.json`
+records which skill scaffolded the doc — useful for later auditing or
+for `/tdoc list` to show provenance.
 
 ### `/tdoc edit <slug> [<extra prompt>]` — new version from comments
 
@@ -411,25 +588,336 @@ The overlay applies these as `:where()` defensive defaults so old docs degrade g
 
 ### Comment anchor stability (important for `/tdoc edit`)
 
-When a user comments on an artifact, the comment stores a CSS selector for that element (built from the element's id if present, otherwise its tag + nth-of-type path). For comments to **survive `/tdoc edit` regenerations**, anchored elements should have **stable selectors across versions**:
+**The system handles this for you.** Element anchors are identity-based, not path-based: at publish time, the Worker stamps every commentable artifact with a content-hashed `data-tdoc-aid` attribute. The set of commentable artifacts:
 
-- **Give every commentable artifact a deterministic `id`** (e.g. `<canvas id="life">`, `<svg id="diagram-a">`, `<img id="hero">`). The selector becomes `#life`, immune to reordering.
-- **Don't change ids between versions** unless the artifact's purpose has changed.
-- **Don't add/remove sibling elements** of similar tags above an unidentified artifact — that shifts its nth-of-type.
-- When you DO change an anchored element semantically, accept that its comments may become "unanchored" — they'll still render in the margin under an "unanchored" header so they're not lost.
+- **Media leaves:** `img, svg, canvas, video, pre, figure, iframe[src]`
+- **Semantic blocks:** `section, aside, blockquote, table, details` (`article` is intentionally excluded — it's a content-root pattern; using it would make the whole doc one artifact)
+- **Author opt-in:** any element tagged `data-tdoc-artifact` or with class containing `tdoc-artifact`
+
+The **same artifact in any future version gets the same aid**, regardless of how the HTML around it is restructured. Comments anchor by aid; resolution is identity-first. If an aid disappears from the new version, the Worker marks the comment `kind: "lost"` so it renders unanchored — it will **never silently re-attach to a different artifact**.
+
+### Make an author-composed block commentable as a unit
+
+If your doc has a "card" or composite widget built from `<div>`s (a transcript panel, a comparison card, a custom interactive widget), it won't be commentable as a unit by default — the overlay sees its inner text, not the card. Two ways to fix:
+
+1. **Use a semantic tag**: change `<div class="my-card">` to `<section class="my-card">` (or `<aside>`, `<details>` if appropriate). Automatic — no other change needed.
+2. **Opt in explicitly** with `data-tdoc-artifact`:
+   ```html
+   <div class="my-card" data-tdoc-artifact>…composite content…</div>
+   ```
+   Or use a class containing `tdoc-artifact`. Works on any tag.
+
+Both paths give the block a stable aid and the full hover-to-comment affordance, identical to the media-leaf experience.
+
+You generally don't need to do anything special when regenerating — the aid stamping is automatic on `/tdoc publish`. But it's still polite to:
+
+- **Keep an artifact's essential content stable** if its comment thread is still meaningful. The aid is derived from the artifact's tag + intrinsic attrs (`viewBox`, `src`, `alt`, `aria-label`, `title`) + normalized inner content. Trivial whitespace changes don't matter; replacing an SVG with an entirely different one *does* (and that's the right behavior — the comments were about the old artifact).
+- **Stable author-given ids are still nice** for things like deep links, but they're no longer required for anchor stability.
+- **When a comment intentionally goes unanchored** (because you replaced the artifact), say so in the agent reply. The user sees "anchor lost" in the margin and knows to either re-anchor it or accept the loss.
 
 ## Comment anchoring
 
-Comments are persisted with:
+Comments are persisted with one of two anchor shapes:
+
 ```json
-{
-  "id": "c_<timestamp>",
-  "version": 1,
-  "anchor": { "text": "exact highlighted text", "context_before": "...", "context_after": "..." },
-  "text": "what the user wrote",
-  "status": "open",
-  "created": "<iso>"
-}
+// text anchor
+{ "id": "c_<ts>", "version": 1, "text": "what the user wrote",
+  "status": "open", "created": "<iso>",
+  "anchor": { "kind": "text", "text": "exact highlighted text",
+              "context_before": "...", "context_after": "..." } }
+
+// element (artifact) anchor — IDENTITY-BASED
+{ "id": "c_<ts>", "version": 1, "text": "what the user wrote",
+  "status": "open", "created": "<iso>",
+  "anchor": { "kind": "element",
+              "aid": "<content-hash>",        // ← primary key: the worker-stamped
+                                              //   data-tdoc-aid on the artifact.
+                                              //   Same artifact across versions = same aid.
+              "selector": "[data-tdoc-aid=\"...\"]",  // mirror of aid; legacy
+                                                       // comments may still have
+                                                       // a positional selector.
+              "label": "svg",                 // tag hint
+              "fingerprint": { ... },         // legacy content fingerprint
+              "fallback": { "ratio": ..., "nearestHeading": ... } } }
+
+// lost-anchor — the Worker's publish-time reconciliation marks an element
+// comment lost when its aid disappears or can't be resolved unambiguously.
+// Renders as "unanchored" in the margin; never silently re-attached.
+{ ..., "anchor": { "kind": "lost", "reason": "aid not found in version" } }
 ```
 
-When regenerating, find the anchor text in the current HTML and apply the requested change to that region. If the anchor no longer exists (because a prior version removed it), apply the comment as a general directive.
+**Text anchors:** find the anchor text in the current HTML and apply the
+change. If the text no longer exists, apply as a general directive.
+
+**Element anchors:** identity is the **`aid`** — the Worker auto-stamps
+`data-tdoc-aid="<content-hash>"` on every commentable artifact at publish
+time, and reconciles existing anchors against the new artifact set on every
+upload. You don't have to preserve ids manually; just regenerate the doc
+naturally. Comments on unchanged artifacts stay anchored; comments on
+artifacts you genuinely replaced go `kind: "lost"` automatically.
+
+---
+
+# Telemetry — MANDATORY workflow steps, not optional
+
+**Treat this skill file as executable instructions, not reference
+material.** Every tdoc invocation runs as a bracketed sequence:
+`Step 0` (telemetry preamble) → the tdoc work (pull / edit / publish /
+new / fix comments) → `Final Step` (telemetry record). All three run,
+in order, every single time.
+
+- **Step 0 (preamble)** runs FIRST, before any tdoc work.
+- **Final Step (record)** runs LAST, after all tdoc work, on every
+  outcome.
+
+Skipping either is a **regression**. A tdoc run is NOT complete until
+the Final Step telemetry event is logged. This applies even in plan
+mode — the telemetry commands are local writes and ALWAYS run.
+
+### Behavioral patch — applies to you, the agent reading this
+
+Your default efficiency habit is to read a skill file, find the part
+relevant to the user's request, do that, and stop. **For tdoc,
+suppress that habit.** Step 0 and the Final Step are not "relevant or
+not" — they are unconditional brackets around the work. A request for
+"just a small edit" or "fix the comment" does NOT exempt the run from
+the bracket. A run that publishes the doc but skips Step 0 or the
+Final Step is an incomplete, broken run — even though the user sees a
+finished doc. Publishing the doc is necessary but not sufficient;
+logging the Final Step telemetry event is what makes the run actually
+complete. Do not declare the task done before the Final Step has run.
+
+---
+
+## Step 0 — Telemetry preamble (ALWAYS RUN FIRST)
+
+This block records anonymous usage data so the tdoc maintainer can see
+which features people actually use and what breaks. **Default-on with
+first-run consent prompt.** Three opt-out paths described at the bottom.
+
+```bash
+TEL_HOME="$HOME/.tdoc"
+TEL_PROMPTED_FLAG="$TEL_HOME/.telemetry-prompted"
+TEL_CONFIG_FILE="$TEL_HOME/.telemetry-mode"
+
+mkdir -p "$TEL_HOME"
+
+# Read existing choice. Priority: env var > persisted file > default "on"
+TEL_MODE_PERSISTED="$(cat "$TEL_CONFIG_FILE" 2>/dev/null | tr -d ' \n\r')"
+TEL_PROMPTED="no"
+[ -f "$TEL_PROMPTED_FLAG" ] && TEL_PROMPTED="yes"
+
+if [ -n "${SKILL_TELEMETRY:-}" ]; then
+  TEL_EFFECTIVE="$SKILL_TELEMETRY"
+elif [ -n "$TEL_MODE_PERSISTED" ]; then
+  TEL_EFFECTIVE="$TEL_MODE_PERSISTED"
+else
+  TEL_EFFECTIVE="on"
+fi
+
+# Session ID — Claude Code sets $CLAUDE_SESSION_ID in newer versions;
+# fall back to a stable per-shell id so concurrent sessions don't
+# overwrite each other's sentinel.
+TEL_SESSION_ID="${CLAUDE_SESSION_ID:-shell-$$-$(date +%s)}"
+
+# Write per-session sentinel (not one global file)
+if [ "$TEL_EFFECTIVE" != "off" ]; then
+  mkdir -p "$TEL_HOME/sentinels"
+  date +%s > "$TEL_HOME/sentinels/$TEL_SESSION_ID"
+  find "$TEL_HOME/sentinels" -type f -mtime +1 -delete 2>/dev/null || true
+
+  # ── Self-healing pending marker (gstack pattern) ──
+  # Write a .pending marker for THIS session. The Final Step deletes it.
+  # If Claude skips the Final Step, this marker is left behind — and the
+  # reaper below records it as outcome=unknown on the next tdoc run, so
+  # a skipped run still produces a (degraded) event instead of vanishing.
+  PENDING_DIR="$TEL_HOME/telemetry/pending"
+  mkdir -p "$PENDING_DIR"
+  TEL_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"skill":"tdoc","ts":"%s","session_id":"%s"}\n' \
+    "$TEL_TS" "$TEL_SESSION_ID" > "$PENDING_DIR/.pending-$TEL_SESSION_ID"
+
+  # Reap stale markers from prior skipped runs (any session but ours)
+  for _PF in "$PENDING_DIR"/.pending-*; do
+    [ -f "$_PF" ] || continue
+    _PF_SID="$(basename "$_PF")"; _PF_SID="${_PF_SID#.pending-}"
+    [ "$_PF_SID" = "$TEL_SESSION_ID" ] && continue
+    _PDATA="$(cat "$_PF" 2>/dev/null || true)"
+    rm -f "$_PF" 2>/dev/null || true
+    [ -z "$_PDATA" ] && continue
+    _P_SKILL="$(echo "$_PDATA" | grep -o '"skill":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    _P_SID="$(echo "$_PDATA" | grep -o '"session_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    [ -z "$_P_SKILL" ] && continue
+    if [ -x "__TDOC_DIR__/telemetry/bin/telemetry-log" ]; then
+      "__TDOC_DIR__/telemetry/bin/telemetry-log" \
+        --skill "$_P_SKILL" --outcome unknown \
+        --step "reaped-incomplete-run" --session-id "$_P_SID" 2>/dev/null || true
+    fi
+  done
+fi
+
+# ─── Upgrade check (gstack-style lifecycle event) ───────────
+# Check installed version against latest release. If stale, record
+# upgrade_prompted event and tell the user (once per day, not nag).
+# TDOC_DIR is substituted at install time by postinstall-telemetry.sh
+# so this works no matter where tdoc is cloned.
+TDOC_DIR="__TDOC_DIR__"
+
+# Resolve installed version, trying multiple sources in order:
+#   1. VERSION file (if maintained, like gstack)
+#   2. git describe --tags (most recent reachable tag)
+#   3. fallback "0.0.0" (skip the check)
+INSTALLED_VERSION="$(cat "$TDOC_DIR/VERSION" 2>/dev/null)"
+if [ -z "$INSTALLED_VERSION" ] && [ -d "$TDOC_DIR/.git" ]; then
+  INSTALLED_VERSION="$(cd "$TDOC_DIR" && git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+fi
+[ -z "$INSTALLED_VERSION" ] && INSTALLED_VERSION="0.0.0"
+
+UPGRADE_CHECK_FLAG="$TEL_HOME/.upgrade-checked-$(date +%Y-%m-%d)"
+if [ "$TEL_EFFECTIVE" != "off" ] && [ ! -f "$UPGRADE_CHECK_FLAG" ] && [ "$INSTALLED_VERSION" != "0.0.0" ]; then
+  LATEST=$(curl -s --max-time 3 https://api.github.com/repos/serenakeyitan/tdoc/releases/latest 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
+  # Only fire upgrade prompt if installed is STRICTLY OLDER than latest.
+  # Use sort -V (version sort): if installed sorts first, installed < latest.
+  # If installed == latest or installed > latest (dev build), skip silently.
+  if [ -n "$LATEST" ] && [ "$LATEST" != "$INSTALLED_VERSION" ]; then
+    FIRST_VERSION=$(printf '%s\n%s\n' "$INSTALLED_VERSION" "$LATEST" | sort -V | head -1)
+    if [ "$FIRST_VERSION" = "$INSTALLED_VERSION" ]; then
+      "$TDOC_DIR/telemetry/bin/telemetry-log" \
+        --skill tdoc \
+        --event-type upgrade_prompted \
+        --outcome unknown \
+        --skill-version "$INSTALLED_VERSION" \
+        --step "v$INSTALLED_VERSION→v$LATEST" \
+        --session-id "$TEL_SESSION_ID" 2>/dev/null || true
+      echo "TDOC_UPGRADE_AVAILABLE: $INSTALLED_VERSION → $LATEST  (cd $TDOC_DIR && git pull && bin/postinstall-telemetry.sh)"
+    fi
+  fi
+  touch "$UPGRADE_CHECK_FLAG" 2>/dev/null || true
+fi
+
+echo "TEL_PROMPTED: $TEL_PROMPTED"
+echo "TEL_EFFECTIVE: $TEL_EFFECTIVE"
+echo "TEL_SESSION_ID: $TEL_SESSION_ID"
+echo "TDOC_VERSION: $INSTALLED_VERSION"
+```
+
+### Instructions for the agent
+
+**If `TEL_PROMPTED` is `no`** (first time the user runs tdoc with
+telemetry), ask the user ONCE with this text and two options:
+
+> tdoc can record when it runs, how it went (success/error/abandoned),
+> how long it took, and a random ID for your machine, and send it to
+> the tdoc maintainer's database. It does NOT record your tdoc content,
+> your prompts, or anything else. Nothing is sent to Anthropic.
+>
+> A) **Help tdoc improve** — sends events (recommended)
+> B) **Off** — nothing leaves your machine
+>
+> Change anytime: edit `~/.tdoc/.telemetry-mode`, or set
+> `SKILL_TELEMETRY=off`.
+
+**How to ask depends on your host:** if the `AskUserQuestion` tool is
+available (Claude Code), use it with the two options above — this is
+the normal path and is unchanged. If it is NOT available (e.g. Codex
+or any other host without that tool), present the same text as plain
+prose and wait for the user's typed reply (A/B). Either way, record
+their choice the same.
+
+After they pick, record the choice:
+
+```bash
+echo "MODE_FROM_USER" > "$TEL_CONFIG_FILE"  # "on" or "off"
+touch "$TEL_PROMPTED_FLAG"
+TEL_EFFECTIVE="$(cat "$TEL_CONFIG_FILE")"
+```
+
+**If `TEL_PROMPTED` is `yes`**, do NOT ask again. Proceed silently.
+
+---
+
+## Final Step — Telemetry record (ALWAYS RUN LAST, no exceptions)
+
+**This is the last required step of every tdoc run.** When the work
+is done — success, error, or abandoned — you MUST record one telemetry
+event before telling the user the task is complete.
+
+**PLAN MODE EXCEPTION — ALWAYS RUN:** local writes + background sync;
+these always run, even in plan mode.
+
+"The doc is published" is NOT the end of the skill. The end of the
+skill is after this telemetry event fires. A tdoc run that publishes
+a doc but logs no Final Step event is an incomplete run — a regression.
+
+```bash
+TEL_HOME="$HOME/.tdoc"
+TEL_SESSION_ID="${CLAUDE_SESSION_ID:-${TEL_SESSION_ID:-shell-$$-$(date +%s)}}"
+END=$(date +%s)
+START=$(cat "$TEL_HOME/sentinels/$TEL_SESSION_ID" 2>/dev/null || echo "$END")
+DURATION=$(( END - START ))
+rm -f "$TEL_HOME/sentinels/$TEL_SESSION_ID"
+
+# Clear THIS session's pending marker — we're about to log the real
+# event, so the self-healing reaper must not later treat it as orphaned.
+rm -f "$TEL_HOME/telemetry/pending/.pending-$TEL_SESSION_ID" 2>/dev/null
+
+TEL_EFFECTIVE="${SKILL_TELEMETRY:-$(cat "$TEL_HOME/.telemetry-mode" 2>/dev/null || echo on)}"
+```
+
+If `TEL_EFFECTIVE` is `off`, **stop here** — do not call telemetry-log.
+
+Otherwise pick the block matching the outcome.
+
+**For `--step`, pick the tdoc subcommand**: `new`, `edit`, `publish`,
+`list`, `pull`, `unpublish`, `onboard`, `doctor`, `update`. If the user
+invoked multiple in one session, use the last one. If it was an ad-hoc
+mention (not a /tdoc command), use `chat` or `freeform`.
+
+**On success**:
+
+```bash
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+  --skill tdoc \
+  --outcome success \
+  --duration "$DURATION" \
+  --step "<subcommand: new|edit|publish|list|pull|unpublish|onboard|doctor|update|chat>" \
+  --skill-version "$INSTALLED_VERSION" \
+  --session-id "$TEL_SESSION_ID"
+```
+
+**On error**:
+
+```bash
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+  --skill tdoc \
+  --outcome error \
+  --duration "$DURATION" \
+  --error-class "<short tag, e.g. 'publish_timeout' / 'auth_failed' / 'malformed_input'>" \
+  --error-message "<full debug context, ≤400 chars>" \
+  --step "<which subcommand was running and what phase failed>" \
+  --skill-version "$INSTALLED_VERSION" \
+  --session-id "$TEL_SESSION_ID"
+```
+
+**On abandoned** (user asked to stop):
+
+```bash
+"__TDOC_DIR__/telemetry/bin/telemetry-log" \
+  --skill tdoc \
+  --outcome abandoned \
+  --duration "$DURATION" \
+  --step "<subcommand + phase you were on>" \
+  --skill-version "$INSTALLED_VERSION" \
+  --session-id "$TEL_SESSION_ID"
+```
+
+The script is fire-and-forget. It returns instantly and syncs to
+Supabase in the background.
+
+### Three opt-out paths
+
+- **First run**: pick "Off" in the consent prompt above
+- **Persistent**: `echo off > ~/.tdoc/.telemetry-mode`
+- **Ephemeral**: `export SKILL_TELEMETRY=off`
+
+See `telemetry/PRIVACY.md` for the full list of recorded fields.

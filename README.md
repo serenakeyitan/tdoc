@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/872957b6-34bd-4c67-a3fa-3911ebd09d09
 
 **Turn a prompt into an interactive doc, share it as a live URL, get Google-Docs-style comments back — straight into your agent.**
 
-Open-source take on Jesse Pollak's bdocs concept. Authored by an agent, not maintained by hand. tdoc deploys to **your own free Cloudflare Worker**, so you get a public shareable link with zero hosting cost and zero infra to manage — and it's a Claude Code / Codex **skill** with built-in version control.
+Open-source take on Jesse Pollak's bdocs concept. Authored by an agent, not maintained by hand. tdoc deploys to **your own free Cloudflare Worker**, so you get a public shareable link with zero hosting cost and zero infra to manage — and it's an **agent skill** with built-in version control. It's a first-class **Claude Code** skill; it also runs under **Codex** (the skill auto-detects the host and falls back to plain-text prompts where Claude-specific tools aren't available — see [Using tdoc with Codex](#using-tdoc-with-codex)).
 
 ```
 You:  /tdoc new "an explainer with a slider showing how interest compounds"
@@ -47,6 +47,16 @@ Install tdoc by following https://github.com/serenakeyitan/tdoc/blob/main/ONBOAR
 The agent clones the repo, runs the doctor, walks you through the ~2 browser clicks for Cloudflare, and ends with a published URL. **Zero to live in ~3 minutes.**
 
 Or via the plugin marketplace: `/plugin marketplace add serenakeyitan/tdoc`
+
+### Using tdoc with Codex
+
+tdoc is authored as a Claude Code skill but is host-aware, so it works under Codex too:
+
+- **Install location**: clone (or symlink) the repo into `~/.codex/skills/tdoc` (Codex reads `~/.codex/skills/`), the same way Claude Code uses `~/.claude/skills/tdoc`. The setup snippet resolves whichever location exists, and you can override with `TDOC_SKILL_DIR`.
+- **Prompts**: where the skill would use Claude Code's `AskUserQuestion` picker (only the first-run telemetry consent), under Codex it falls back to asking the same question as plain text and reading your typed reply. No functionality is lost.
+- **What's the same**: the worker, the CLI (`bin/tdoc-*`), comments, versions, publish — all host-independent.
+
+What is *not* yet first-class on Codex: native slash-command registration (`/tdoc …`) — you invoke tdoc by pointing Codex at `SKILL.md` and asking it to run the workflow. That's the one rough edge versus Claude Code.
 
 ## Commands
 

@@ -179,7 +179,15 @@ Server runs at `http://localhost:7878` and serves:
 
 ```bash
 TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"
-SKILL_DIR="$HOME/.claude/skills/tdoc"
+# Resolve the skill dir for whichever host installed it: Claude Code
+# (~/.claude/skills/tdoc) or Codex (~/.codex/skills/tdoc). Honor an explicit
+# TDOC_SKILL_DIR override if set. Claude's location is checked first, so its
+# behavior is unchanged.
+SKILL_DIR="${TDOC_SKILL_DIR:-}"
+[ -z "$SKILL_DIR" ] && for d in "$HOME/.claude/skills/tdoc" "$HOME/.codex/skills/tdoc"; do
+  [ -f "$d/SKILL.md" ] && SKILL_DIR="$d" && break
+done
+SKILL_DIR="${SKILL_DIR:-$HOME/.claude/skills/tdoc}"
 mkdir -p "$TDOC_DIR"
 
 # Check server is running
@@ -666,7 +674,7 @@ Skipping either is a **regression**. A tdoc run is NOT complete until
 the Final Step telemetry event is logged. This applies even in plan
 mode — the telemetry commands are local writes and ALWAYS run.
 
-### Behavioral patch — applies to you, Claude, reading this
+### Behavioral patch — applies to you, the agent reading this
 
 Your default efficiency habit is to read a skill file, find the part
 relevant to the user's request, do that, and stop. **For tdoc,
@@ -793,10 +801,10 @@ echo "TEL_SESSION_ID: $TEL_SESSION_ID"
 echo "TDOC_VERSION: $INSTALLED_VERSION"
 ```
 
-### Instructions for Claude
+### Instructions for the agent
 
 **If `TEL_PROMPTED` is `no`** (first time the user runs tdoc with
-telemetry), call `AskUserQuestion` ONCE with this text and two options:
+telemetry), ask the user ONCE with this text and two options:
 
 > tdoc can record when it runs, how it went (success/error/abandoned),
 > how long it took, and a random ID for your machine, and send it to
@@ -808,6 +816,13 @@ telemetry), call `AskUserQuestion` ONCE with this text and two options:
 >
 > Change anytime: edit `~/.tdoc/.telemetry-mode`, or set
 > `SKILL_TELEMETRY=off`.
+
+**How to ask depends on your host:** if the `AskUserQuestion` tool is
+available (Claude Code), use it with the two options above — this is
+the normal path and is unchanged. If it is NOT available (e.g. Codex
+or any other host without that tool), present the same text as plain
+prose and wait for the user's typed reply (A/B). Either way, record
+their choice the same.
 
 After they pick, record the choice:
 
