@@ -170,10 +170,13 @@ sharing, with GitHub auth gating comments.
     comments.json      # [{ id, version, anchor, text, status }]
 ```
 
-Server runs at `http://localhost:7878` and serves:
+Server runs at `http://localhost:7878` (override with `TDOC_PORT`) and serves:
 - `/` — index of all docs
 - `/d/<slug>/v/<n>` — a specific version (injects comment overlay)
 - `/api/comments` GET/POST — comment persistence
+- `/api/ping` — health check; responds `{"ok":true,"service":"tdoc"}`. The
+  `service` field is the identity marker — a foreign service answering 200 on
+  the port must NOT pass as tdoc.
 
 ## Setup check
 
@@ -190,13 +193,23 @@ done
 SKILL_DIR="${SKILL_DIR:-$HOME/.claude/skills/tdoc}"
 mkdir -p "$TDOC_DIR"
 
-# Check server is running
-if curl -sf http://localhost:7878/api/ping >/dev/null 2>&1; then
+# Check server is running. Identity-check the body — 200 alone is not proof
+# the answerer is tdoc; another local service can squat the port.
+TDOC_PORT="${TDOC_PORT:-7878}"
+PING_BODY=$(curl -sf --max-time 2 "http://localhost:${TDOC_PORT}/api/ping" 2>/dev/null || true)
+if printf '%s' "$PING_BODY" | grep -q '"service" *: *"tdoc"'; then
   echo "SERVER_OK"
+elif [ -n "$PING_BODY" ]; then
+  echo "PORT_FOREIGN"   # something else answers on the port — do NOT use it
 else
   echo "SERVER_DOWN"
 fi
 ```
+
+If `PORT_FOREIGN`: another service holds port ${TDOC_PORT}. If `pgrep -f
+"$SKILL_DIR/server/server.js"` finds a process, it's an outdated tdoc server —
+restart it. Otherwise tell the user which process holds the port (`lsof -i
+:${TDOC_PORT}`) and either free it or set `TDOC_PORT` to a free port.
 
 If server is down, start it:
 ```bash
@@ -494,6 +507,7 @@ When the user reports a problem, check these first:
 - **`/api/publish` 404, or "string did not match the expected pattern" in the Publish modal** → the running server is stale (old process, doesn't have current routes). Restart it: `pkill -f "$SKILL_DIR/server/server.js" && nohup node "$SKILL_DIR/server/server.js" > "$TDOC_DIR/.server.log" 2>&1 &`. `/tdoc update` now auto-restarts, but a server that was started before the update is still running stale code until restarted.
 - **Comment popup doesn't appear when selecting text** → ensure overlay.js has the fix where a drag-without-artifact-intersection falls through to the text-selection branch (regression test: `ui.test.js` "Drag-to-select TEXT in a `<p>` opens the comment popup"). If the test fails, check `overlay.js` mouseup handler: the `if (dragged) { ... return; }` block must only `return` when an artifact was actually hit.
 - **Publish modal hangs forever** → check `~/tdocs/.server.log`; usually `wrangler login` is waiting for browser auth or R2 isn't enabled.
+- **Local doc URLs show the wrong content / weird JSON, or the server "is up" but docs 404** → another local service may be squatting the tdoc port (seen in the wild: a daemon from another product bound 7878). Run `curl -s http://localhost:7878/api/ping` — if the body lacks `"service":"tdoc"`, the answerer is not tdoc. Identify the squatter with `lsof -i :7878`, then free the port or run tdoc on another port via `TDOC_PORT=<port>` (the bin scripts and server all honor it).
 
 ## HTML generation rules
 

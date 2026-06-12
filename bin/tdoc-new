@@ -165,16 +165,47 @@ printf '[]\n' > "$DOC_DIR/comments.json"
 info "scaffolded $DOC_DIR (v1)"
 
 # ───────────────────────── ensure local server up ────────────────────────
+# A 200 on /api/ping is not proof the answerer is tdoc — another local
+# service can squat the port (seen in the wild on 7878). Identity-check the
+# body for `"service":"tdoc"` and only treat a marker match as "up".
+TDOC_PORT="${TDOC_PORT:-7878}"
+
+tdoc_ping() {
+  curl -sf --max-time 2 "http://localhost:${TDOC_PORT}/api/ping" 2>/dev/null \
+    | grep -q '"service" *: *"tdoc"'
+}
+
+port_answers() {
+  curl -sf --max-time 2 -o /dev/null "http://localhost:${TDOC_PORT}/api/ping" 2>/dev/null
+}
+
 SERVER_UP=0
-if curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1; then
+if tdoc_ping; then
   SERVER_UP=1
-else
+elif port_answers; then
+  # Something else is answering HTTP on our port. If it's a stale tdoc
+  # server (pre-identity-marker build), restart it; if foreign, bail —
+  # starting another server would fail to bind and the printed URL would
+  # route to the wrong service.
+  if pgrep -f "$SKILL_DIR/server/server.js" >/dev/null 2>&1; then
+    info "outdated tdoc server on port ${TDOC_PORT}; restarting..."
+    pkill -f "$SKILL_DIR/server/server.js" 2>/dev/null || true
+    sleep 1
+  else
+    echo "[tdoc] port ${TDOC_PORT} is answering HTTP but is NOT the tdoc server (foreign service)." >&2
+    echo "[tdoc] the doc was scaffolded at $DOC_DIR but is not being served." >&2
+    echo "[tdoc] free the port, or set TDOC_PORT to another port and re-run." >&2
+    exit 1
+  fi
+fi
+
+if [ "$SERVER_UP" != "1" ]; then
   info "local server down; starting..."
   nohup node "$SKILL_DIR/server/server.js" > "$TDOC_DIR/.server.log" 2>&1 &
   # Wait briefly so the URL we print is actually reachable.
   for _ in 1 2 3 4 5 6 7 8; do
     sleep 0.3
-    if curl -sf "http://localhost:7878/api/ping" >/dev/null 2>&1; then SERVER_UP=1; break; fi
+    if tdoc_ping; then SERVER_UP=1; break; fi
   done
 fi
 
@@ -187,7 +218,7 @@ if [ "$SERVER_UP" != "1" ]; then
   exit 1
 fi
 
-LOCAL_URL="http://localhost:7878/d/$SLUG/v/1"
+LOCAL_URL="http://localhost:${TDOC_PORT}/d/$SLUG/v/1"
 
 # ─────────────────────────────── publish? ─────────────────────────────────
 PUBLISHED_URL=""

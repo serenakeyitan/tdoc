@@ -1395,7 +1395,7 @@ export default {
 
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
-    if (p === '/api/ping') return json({ ok: true });
+    if (p === '/api/ping') return json({ ok: true, service: 'tdoc' });
 
     // ---- landing (NO public catalog) ----
     // `/` never lists docs. Docs are only reachable via their direct link.

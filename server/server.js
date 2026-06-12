@@ -166,7 +166,10 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
-  if (p === '/api/ping') return json(res, 200, { ok: true });
+  // `service` is the identity marker health checks grep for — a foreign
+  // process answering 200 on this port must not pass as tdoc (seen in the
+  // wild: a daemon from another product bound 7878).
+  if (p === '/api/ping') return json(res, 200, { ok: true, service: 'tdoc' });
 
   if (p === '/') return send(res, 200, indexPage(), { 'Content-Type': 'text/html; charset=utf-8' });
 

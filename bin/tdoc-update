@@ -95,10 +95,13 @@ if pgrep -f "$SKILL_DIR/server/server.js" >/dev/null 2>&1; then
   mkdir -p "$TDOC_DIR"
   nohup node "$SKILL_DIR/server/server.js" > "$TDOC_DIR/.server.log" 2>&1 &
   sleep 1
-  if curl -sf http://localhost:7878/api/ping >/dev/null 2>&1; then
-    echo "[tdoc-update] server back up at http://localhost:7878"
+  # Identity-check the body — a foreign service answering 200 on the port
+  # must not be reported as "server back up".
+  TDOC_PORT="${TDOC_PORT:-7878}"
+  if curl -sf --max-time 2 "http://localhost:${TDOC_PORT}/api/ping" 2>/dev/null | grep -q '"service" *: *"tdoc"'; then
+    echo "[tdoc-update] server back up at http://localhost:${TDOC_PORT}"
   else
-    echo "[tdoc-update] ⚠ server didn't come back — check $TDOC_DIR/.server.log"
+    echo "[tdoc-update] ⚠ server didn't come back (or a foreign service holds port ${TDOC_PORT}) — check $TDOC_DIR/.server.log"
   fi
 fi
 
