@@ -101,36 +101,51 @@
      headings, lists, code, tables, quotes. Wrapped in :where() so a doc that
      truly needs a different aesthetic can override per element. Future
      templates would live alongside this block, switched by a body class. */
-  /* Default template, modeled after conway-life ("What if a doc could think?").
-     Tight, readable, system-fonts, no fluff. */
+  /* Default template, modeled after Claude Code's markdown rendering.
+     Readable, system-fonts, rounded-cell tables, circle task checkboxes. */
   :where(body) {
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-size: 17px;
-    line-height: 1.65;
-    color: #111;
+    line-height: 1.6;
+    color: #1a1a1a;
     background: #fff;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
   }
-  :where(body h1) { font-size: 34px; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 24px; color: #111; }
-  :where(body h2) { font-size: 24px; line-height: 1.25; font-weight: 700; letter-spacing: -0.005em; margin: 40px 0 14px; color: #111; }
-  :where(body h3) { font-size: 19px; line-height: 1.35; font-weight: 600; margin: 28px 0 10px; color: #111; }
-  :where(body h4) { font-size: 17px; font-weight: 600; margin: 20px 0 6px; color: #111; }
-  :where(body h5, body h6) { font-size: 14px; font-weight: 600; margin: 16px 0 4px; color: #111; text-transform: uppercase; letter-spacing: 0.06em; }
-  :where(body p) { margin: 0 0 18px; }
+  :where(body h1) { font-size: 38px; line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 20px; color: #1a1a1a; }
+  :where(body h2) { font-size: 27px; line-height: 1.25; font-weight: 700; letter-spacing: -0.01em; margin: 44px 0 14px; color: #1a1a1a; }
+  :where(body h3) { font-size: 21px; line-height: 1.35; font-weight: 700; margin: 32px 0 10px; color: #1a1a1a; }
+  :where(body h4) { font-size: 17px; font-weight: 700; margin: 22px 0 6px; color: #1a1a1a; }
+  :where(body h5, body h6) { font-size: 14px; font-weight: 600; margin: 16px 0 4px; color: #1a1a1a; text-transform: uppercase; letter-spacing: 0.06em; }
+  :where(body p) { margin: 0 0 16px; }
   :where(body a) { color: #1652f0; text-decoration: underline; text-underline-offset: 2px; }
   :where(body a:hover) { text-decoration-thickness: 2px; }
-  :where(body ul, body ol) { margin: 0 0 18px; padding-left: 24px; }
-  :where(body li) { margin: 4px 0; }
-  :where(body blockquote) { margin: 24px 0; padding: 4px 20px; border-left: 3px solid #111; color: #555; font: 15px/1.55 system-ui, sans-serif; }
-  :where(body code) { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; background: #f5f6f8; padding: 1px 5px; border-radius: 4px; }
-  :where(body pre) { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 15px; line-height: 1.55; background: #f5f6f8; border-left: 3px solid #111; padding: 16px 20px; margin: 24px 0; overflow-x: auto; }
+  :where(body ul, body ol) { margin: 0 0 18px; padding-left: 26px; }
+  :where(body li) { margin: 8px 0; }
+  :where(body blockquote) { margin: 20px 0; padding: 2px 0 2px 20px; border-left: 3px solid #d9d8d3; color: #6b6a66; }
+  :where(body code) { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; background: #f0f0ee; padding: 2px 6px; border-radius: 6px; }
+  :where(body pre) { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14.5px; line-height: 1.6; background: #f7f7f5; border: 1px solid #e8e7e3; border-radius: 10px; padding: 16px 18px; margin: 20px 0; overflow-x: auto; }
   :where(body pre code) { background: transparent; padding: 0; border-radius: 0; }
-  :where(body hr) { border: 0; border-top: 1px solid #e5e5e5; margin: 32px 0; }
-  :where(body table) { border-collapse: collapse; margin: 0 0 18px; font-size: 15px; }
-  :where(body th, body td) { padding: 8px 12px; border-bottom: 1px solid #e5e5e5; text-align: left; }
-  :where(body th) { font-weight: 600; color: #111; }
-  :where(body figcaption) { font-size: 13px; color: #666; margin-top: 6px; text-align: center; }
+  :where(body hr) { border: 0; border-top: 1px solid #e8e7e3; margin: 36px 0; }
+  /* Tables: Claude-style rounded cells with white gutters — no rules/borders. */
+  :where(body table) { border-collapse: separate; border-spacing: 3px; margin: 0 0 18px -14px; font-size: 16px; }
+  :where(body th, body td) { padding: 10px 14px; background: #f0f0ee; border-radius: 8px; border: 0; text-align: left; }
+  :where(body th) { font-weight: 600; color: #1a1a1a; }
+  :where(body figcaption) { font-size: 13px; color: #6b6a66; margin-top: 6px; text-align: center; }
+  /* Task lists: circle checkboxes, Claude Code style. Works for raw
+     <input type=checkbox> in lists and markdown-converted .task-list-item. */
+  :where(body li:has(> input[type="checkbox"]), body li.task-list-item) { list-style: none; margin-left: -26px; }
+  :where(body input[type="checkbox"]) {
+    appearance: none; -webkit-appearance: none;
+    width: 17px; height: 17px;
+    border: 1.5px solid #c9c8c3; border-radius: 50%;
+    vertical-align: -3px; margin: 0 8px 0 0;
+    background: #fff; cursor: default;
+  }
+  :where(body input[type="checkbox"]:checked) {
+    background: #1a1a1a center / 11px no-repeat url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 8.5l3.5 3.5L13 5" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+    border-color: #1a1a1a;
+  }
   /* Doc imagery only — exclude overlay UI so icons inside the bar / chips /
      buttons / cards keep their inline layout instead of stacking to 16px tall. */
   :where(body img, body svg, body canvas, body video):not(.tdoc-bar *):not(.tdoc-margin-comment *):not(.tdoc-popup *):not(.tdoc-modal-bg *):not(.tdoc-chip *):not(.tdoc-fab *):not(#tdoc-comment-layer *):not(.tdoc-footer *) { display: block; margin: 16px auto; border-radius: 6px; }
