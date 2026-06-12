@@ -169,8 +169,16 @@
   /* Canvas needs special handling: scaling its CSS size doesn't change its
      drawing-buffer size, but at least the box won't overflow. */
   :where(body canvas) { display: block; }
-  /* Wide tables become horizontally scrollable rather than overflowing. */
-  :where(body table) { display: block; max-width: 100%; overflow-x: auto; }
+  /* Wide tables: keep TRUE table layout on desktop — display:block on a
+     table element discards real table layout for anonymous-box fixup, which
+     some engines render with uneven row heights and gaps (seen on published
+     docs). Only degrade to a scrollable block on narrow viewports, where
+     horizontal overflow is the bigger evil. NOTE: no backticks in comments
+     here — this CSS lives inside a JS template literal. */
+  :where(body table) { max-width: 100%; }
+  @media (max-width: 760px) {
+    :where(body table) { display: block; overflow-x: auto; }
+  }
   /* Pre/code blocks scroll horizontally instead of breaking the layout. */
   :where(body pre) { max-width: 100%; overflow-x: auto; }
 
