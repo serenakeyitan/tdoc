@@ -369,11 +369,17 @@ upload_version() {
       --slurpfile meta "$META_FILE" \
       '{slug:$slug, version:$version, html:$html, meta: $meta[0]}')"
   fi
+  # Pass the payload via a temp file, not an argument — docs with embedded
+  # images exceed ARG_MAX as a curl argument (curl: Argument list too long).
+  local payload_file
+  payload_file="$(mktemp -t tdoc-upload.XXXXXX)"
+  printf '%s' "$payload" > "$payload_file"
   local resp
   resp="$(curl -sS --connect-timeout 10 --max-time 120 -X POST "$UPLOAD_BASE/api/upload" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    --data-binary "$payload")" || { echo "[tdoc] v$v upload: network error/timeout" >&2; return 1; }
+    --data-binary @"$payload_file")" || { rm -f "$payload_file"; echo "[tdoc] v$v upload: network error/timeout" >&2; return 1; }
+  rm -f "$payload_file"
   local ok
   ok="$(echo "$resp" | jq -r '.ok // false')"
   if [ "$ok" = "true" ]; then
