@@ -1,6 +1,6 @@
 # tdoc — Google Docs for markdown, with your agent as collaborator
 
-See it live: https://tdoc.serenatan.workers.dev
+See it live: https://tdoc.serenatan.workers.dev/d/conway-life/v/2
 
 https://github.com/user-attachments/assets/872957b6-34bd-4c67-a3fa-3911ebd09d09
 
