@@ -1,7 +1,7 @@
 # tdoc — Google Docs for markdown, with your agent as collaborator
 
 See it live: https://tdoc.serenatan.workers.dev/d/conway-life/v/2
-### shared artifact in [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=tdoc-site) for **free** — the most efficient way to **agentmaxxing your team work** :D
+- use this [link](https://cloud.first-tree.ai/login?utm_source=github&utm_medium=readme&utm_campaign=tdoc-app) to use [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=tdoc-site) for **free!!!** — the most efficient way to **loopmaxx your engineering work** :D
 
 https://github.com/user-attachments/assets/872957b6-34bd-4c67-a3fa-3911ebd09d09
 
