@@ -1886,6 +1886,14 @@
     if (popup) { popup.remove(); popup = null; }
     clearPendingTextHighlight();
     clearPendingElementOutline();
+    // Drop the native browser text selection left over from a drag-select.
+    // Without this, after submitting (or cancelling) a comment on selected
+    // text — especially across table cells — the OS selection lingers and
+    // looks like "everything after the line is still selected" until you
+    // click blank space. The tdoc anchor highlight is correct; this clears
+    // the stray native selection on top of it.
+    const sel = window.getSelection && window.getSelection();
+    if (sel && sel.rangeCount > 0) sel.removeAllRanges();
   }
 
   function openPopup(anchor, rect) {
