@@ -102,7 +102,7 @@ Always re-run `bin/tdoc-doctor` between steps. State changes — what was missin
 
 **The two `click` steps you'll encounter most:**
 
-1. **Claim a workers.dev subdomain** — one-time pick. URL: `https://dash.cloudflare.com/<account_id>/workers/onboarding`. User chooses any name (typically their handle). Free.
+1. **Claim a workers.dev subdomain** — one-time pick. URL: `https://dash.cloudflare.com/?to=/:account/workers-and-pages`. On the Workers & Pages page Cloudflare prompts for a subdomain; user chooses any name (typically their handle). Free.
 2. **Enable R2** — one-time click. URL: `https://dash.cloudflare.com/<account_id>/r2`. Free tier is 10 GB. Requires acknowledging Cloudflare's pricing page.
 
 Don't surprise the user — explain briefly *why* before you ask them to click.

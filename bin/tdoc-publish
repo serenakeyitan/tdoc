@@ -201,7 +201,7 @@ first_time_setup() {
 
   if [ -z "$SUBDOMAIN" ] || [ "$SUBDOMAIN" = "null" ]; then
     fail_with_agent_prompt "no workers.dev subdomain claimed on Cloudflare account $account_id" \
-      "The user hasn't claimed a workers.dev subdomain yet — tdoc can't publish without one. Open this URL in their browser: https://dash.cloudflare.com/$account_id/workers/onboarding. Ask them to pick any name (usually their handle) and confirm. It's free and one-time. After they say done, run '/tdoc publish $SLUG' again."
+      "The user hasn't claimed a workers.dev subdomain yet — tdoc can't publish without one. Open this URL in their browser: https://dash.cloudflare.com/?to=/:account/workers-and-pages. On the Workers & Pages page, Cloudflare prompts them to pick a workers.dev subdomain (any name, usually their handle). It's free and one-time. After they say done, run '/tdoc publish $SLUG' again."
   fi
   echo "[tdoc] subdomain: ${SUBDOMAIN}.workers.dev"
 
