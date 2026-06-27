@@ -13,6 +13,7 @@
 #   TDOC_MOCK_NO_CF_LOGIN=1         # wrangler not logged in
 #   TDOC_MOCK_NO_SUBDOMAIN=1        # workers.dev subdomain not claimed
 #   TDOC_MOCK_NO_R2=1               # R2 not enabled
+#   TDOC_MOCK_NO_PUBLISH_TOKEN=1    # logged in but stored OAuth token unreadable
 #   TDOC_MOCK_NOT_PUBLISHED=1       # no ~/.tdoc/published.json
 #
 # Exit code is always 0; consumers read the JSON.
@@ -24,6 +25,33 @@ CONFIG_FILE="${TDOC_CONFIG_FILE:-$HOME/.tdoc/published.json}"
 
 # --- helpers ---
 # (Removed unused have() helper — dead code from an abandoned rewrite.)
+
+# Resolve the Cloudflare credential wrangler stored at login. Mirrors
+# wrangler's own getGlobalWranglerConfigPath (xdg-app-paths): legacy
+# ~/.wrangler dir FIRST if it exists, else the xdg location
+# (~/Library/Preferences/.wrangler on macOS, ${XDG_CONFIG_HOME:-~/.config}/
+# .wrangler on Linux, %APPDATA%/xdg.config/.wrangler on Windows). Also honors
+# an explicit CLOUDFLARE_API_TOKEN / CF_API_TOKEN. Must stay in sync with the
+# copy in bin/tdoc-publish. Prints the token + returns 0 if found, else 1.
+resolve_wrangler_oauth_token() {
+  local v
+  for v in "${CLOUDFLARE_API_TOKEN:-}" "${CF_API_TOKEN:-}"; do
+    [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+  done
+  local legacy="$HOME/.wrangler" xdg cands=() base d tok
+  case "$(uname -s)" in
+    Darwin) xdg="${XDG_CONFIG_HOME:-$HOME/Library/Preferences}/.wrangler" ;;
+    MINGW*|MSYS*|CYGWIN*) xdg="${APPDATA:-$HOME/AppData/Roaming}/xdg.config/.wrangler" ;;
+    *)      xdg="${XDG_CONFIG_HOME:-$HOME/.config}/.wrangler" ;;
+  esac
+  if [ -d "$legacy" ]; then cands=("$legacy" "$xdg"); else cands=("$xdg" "$legacy"); fi
+  for base in "${cands[@]}"; do
+    d="$base/config/default.toml"
+    tok="$(grep -E '^oauth_token' "$d" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')"
+    [ -n "$tok" ] && { printf '%s' "$tok"; return 0; }
+  done
+  return 1
+}
 
 # Use jq if available to assemble JSON properly; fall back to manual emission.
 HAS_JQ=0
@@ -57,13 +85,17 @@ cf_account_id=""
 cf_subdomain=""
 cf_subdomain_ok=false
 cf_r2_enabled=false
-cf_publish_token=""
+cf_publish_token_ok=false
 
 if $wrangler_ok && [ -z "${TDOC_MOCK_NO_CF_LOGIN:-}" ]; then
   if wrangler whoami >/dev/null 2>&1; then
     cf_logged_in=true
     cf_account_id="$(wrangler whoami 2>/dev/null | grep -Eo '[a-f0-9]{32}' | head -1 || true)"
-    oauth_token="$(grep -E '^oauth_token' "$HOME/.wrangler/config/default.toml" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+    oauth_token="$(resolve_wrangler_oauth_token || true)"
+    # TDOC_MOCK_NO_PUBLISH_TOKEN: simulate "logged in (whoami works) but the
+    # stored OAuth token can't be read from any wrangler config location".
+    [ -n "${TDOC_MOCK_NO_PUBLISH_TOKEN:-}" ] && oauth_token=""
+    [ -n "$oauth_token" ] && cf_publish_token_ok=true
     if [ -n "$cf_account_id" ] && [ -n "$oauth_token" ]; then
       # Probe subdomain
       if [ -z "${TDOC_MOCK_NO_SUBDOMAIN:-}" ]; then
@@ -101,7 +133,7 @@ fi
 
 # --- ready_to_publish derived flag ---
 ready_to_publish=false
-if $node_ok && $wrangler_ok && $jq_ok && $cf_logged_in && $cf_subdomain_ok && $cf_r2_enabled; then
+if $node_ok && $wrangler_ok && $jq_ok && $cf_logged_in && $cf_publish_token_ok && $cf_subdomain_ok && $cf_r2_enabled; then
   ready_to_publish=true
 fi
 
@@ -117,6 +149,12 @@ if $jq_ok; then
   $jq_ok || cmds="$cmds | . + [{id:\"jq\",label:\"Install jq\",kind:\"install\",cmd:\"brew install jq\"}]"
   if ! $cf_logged_in; then
     cmds="$cmds | . + [{id:\"cf_login\",label:\"Log into Cloudflare\",kind:\"login\",cmd:\"wrangler login\"}]"
+  elif ! $cf_publish_token_ok; then
+    # Logged in (wrangler whoami works) but we couldn't read the stored OAuth
+    # token from any known wrangler config location. Re-login rewrites it, or
+    # the user can supply CLOUDFLARE_API_TOKEN. Without this, doctor used to
+    # silently fall through to "claim subdomain" — misattributing the cause.
+    cmds="$cmds | . + [{id:\"cf_token\",label:\"Re-run wrangler login (could not read stored Cloudflare token)\",kind:\"login\",cmd:\"wrangler login\"}]"
   else
     if ! $cf_subdomain_ok; then
       cmds="$cmds | . + [{id:\"cf_subdomain\",label:\"Claim your free workers.dev subdomain\",kind:\"click\",cmd:\"https://dash.cloudflare.com/$cf_account_id/workers/onboarding\"}]"
@@ -138,6 +176,7 @@ if $jq_ok; then
     --argjson jq_ok "$jq_ok" \
     --argjson gh_ok "$gh_ok" \
     --argjson cf_logged_in "$cf_logged_in" \
+    --argjson cf_publish_token_ok "$cf_publish_token_ok" \
     --arg cf_account_id "$cf_account_id" \
     --argjson cf_subdomain_ok "$cf_subdomain_ok" \
     --arg cf_subdomain "$cf_subdomain" \
@@ -152,7 +191,8 @@ if $jq_ok; then
               wrangler: { ok: $wrangler_ok, version: $wrangler_ver },
               jq: { ok: $jq_ok },
               gh: { ok: $gh_ok } },
-      cloudflare: { logged_in: $cf_logged_in, account_id: $cf_account_id,
+      cloudflare: { logged_in: $cf_logged_in, publish_token_ok: $cf_publish_token_ok,
+                    account_id: $cf_account_id,
                     subdomain: { ok: $cf_subdomain_ok, name: $cf_subdomain },
                     r2_enabled: $cf_r2_enabled },
       published: { ok: $published, subdomain: $publish_subdomain, worker: $publish_worker },

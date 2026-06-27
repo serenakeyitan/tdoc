@@ -61,6 +61,50 @@ cf_api() {
   printf '%s' "$payload"
 }
 
+# Resolve the Cloudflare credential wrangler stored at login.
+#
+# History: this used to hardcode "$HOME/.wrangler/config/default.toml", which
+# broke on a clean modern-wrangler (4.x) macOS install. Wrangler resolves its
+# global config dir via xdg-app-paths (getGlobalWranglerConfigPath): it uses
+# the LEGACY ~/.wrangler dir FIRST if it already exists, otherwise the xdg
+# location — ~/Library/Preferences/.wrangler on macOS, ${XDG_CONFIG_HOME:-
+# ~/.config}/.wrangler on Linux, %APPDATA%/xdg.config/.wrangler on Windows.
+# Honor XDG_CONFIG_HOME on every platform (wrangler does). Also accept an
+# explicit API token from the environment (CI / token-auth users have no
+# default.toml at all).
+#
+# Prints the token on stdout and returns 0 if found; returns 1 otherwise.
+resolve_wrangler_oauth_token() {
+  # 1. Explicit API token from the env wins — these users have no default.toml.
+  local v
+  for v in "${CLOUDFLARE_API_TOKEN:-}" "${CF_API_TOKEN:-}"; do
+    [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+  done
+
+  # 2. Build candidate config dirs in wrangler's own precedence order.
+  local legacy="$HOME/.wrangler" xdg cands=() base d tok
+  case "$(uname -s)" in
+    Darwin) xdg="${XDG_CONFIG_HOME:-$HOME/Library/Preferences}/.wrangler" ;;
+    MINGW*|MSYS*|CYGWIN*) xdg="${APPDATA:-$HOME/AppData/Roaming}/xdg.config/.wrangler" ;;
+    *)      xdg="${XDG_CONFIG_HOME:-$HOME/.config}/.wrangler" ;;
+  esac
+  if [ -d "$legacy" ]; then
+    cands=("$legacy" "$xdg")   # legacy-if-exists first, mirroring wrangler
+  else
+    cands=("$xdg" "$legacy")
+  fi
+
+  # 3. First default.toml that actually contains an oauth_token wins. Scanning
+  #    for the token (not just first-existing-dir) is robust on machines where
+  #    multiple config dirs exist but only one holds a live token.
+  for base in "${cands[@]}"; do
+    d="$base/config/default.toml"
+    tok="$(grep -E '^oauth_token' "$d" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')"
+    [ -n "$tok" ] && { printf '%s' "$tok"; return 0; }
+  done
+  return 1
+}
+
 # When publishing fails for a setup reason (missing dep, R2 not enabled,
 # wrangler logged out), we emit a paste-into-agent prompt instead of a
 # cryptic shell error. The publish modal surfaces stderr to the user, so
@@ -137,9 +181,9 @@ first_time_setup() {
   # 2. auto-detect account id + workers.dev subdomain via Cloudflare API
   echo "[tdoc] detecting account + subdomain..."
   local oauth_token account_id
-  oauth_token="$(grep -E '^oauth_token' "$HOME/.wrangler/config/default.toml" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')"
+  oauth_token="$(resolve_wrangler_oauth_token || true)"
   if [ -z "$oauth_token" ]; then
-    echo "[tdoc] could not read wrangler OAuth token. Re-run 'wrangler login'." >&2
+    echo "[tdoc] could not read a Cloudflare credential. Run 'wrangler login', or set CLOUDFLARE_API_TOKEN." >&2
     exit 1
   fi
   account_id="$(wrangler whoami 2>/dev/null | grep -Eo '[a-f0-9]{32}' | head -1)"
