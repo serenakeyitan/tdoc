@@ -82,6 +82,32 @@ function getStep(report, id) {
     if (step.cmd !== 'wrangler login') throw new Error(`expected 'wrangler login', got "${step.cmd}"`);
   });
 
+  await t('Scenario E2: logged in but token unreadable → cf_token step, publish_token_ok false, not ready', () => {
+    const r = runDoctor({ TDOC_MOCK_NO_PUBLISH_TOKEN: '1' });
+    // The token read happens only inside the "wrangler whoami succeeds" block,
+    // so this scenario can only exercise the real elif branch when the host is
+    // actually logged into Cloudflare. On a logged-out box (typical CI), the
+    // mock has nothing to override — assert the logged-out invariant instead,
+    // so the test is deterministic everywhere rather than environment-flaky.
+    if (!r.cloudflare.logged_in) {
+      if (!getStep(r, 'cf_login')) throw new Error('logged-out host should still surface cf_login');
+      return; // can't simulate logged-in-but-no-token without a real login
+    }
+    // Logged-in host: this is the real #37 regression guard. whoami works but
+    // the stored OAuth token can't be read; doctor used to report
+    // logged_in:true and then silently fall through to "claim subdomain",
+    // misattributing the cause.
+    if (r.cloudflare.publish_token_ok) throw new Error('publish_token_ok should be false when token unreadable');
+    if (r.ready_to_publish) throw new Error('cannot be ready without a usable token');
+    const step = getStep(r, 'cf_token');
+    if (!step) throw new Error('cf_token step missing when token unreadable');
+    if (step.kind !== 'login') throw new Error(`cf_token should be kind:login, got ${step.kind}`);
+    // And it must NOT misattribute to subdomain/r2 when the real cause is the token.
+    if (getStep(r, 'cf_subdomain') || getStep(r, 'cf_r2')) {
+      throw new Error('token failure must not surface as subdomain/r2 steps');
+    }
+  });
+
   await t('Scenario F: never published → published.ok is false but does not appear in missing_steps', () => {
     const r = runDoctor({ TDOC_MOCK_NOT_PUBLISHED: '1' });
     if (r.published.ok) throw new Error('published.ok should be false');
