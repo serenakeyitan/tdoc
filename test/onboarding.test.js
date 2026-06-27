@@ -70,7 +70,7 @@ function getStep(report, id) {
     const step = getStep(r, 'cf_subdomain');
     if (!step) throw new Error('cf_subdomain step missing');
     if (step.kind !== 'click') throw new Error('cf_subdomain should be kind:click');
-    if (!step.cmd.includes('/workers/onboarding')) throw new Error(`expected onboarding URL, got "${step.cmd}"`);
+    if (!step.cmd.includes('/workers-and-pages')) throw new Error(`expected workers-and-pages URL, got "${step.cmd}"`);
   });
 
   await t('Scenario E: not logged into Cloudflare → cf_login step (login kind)', () => {

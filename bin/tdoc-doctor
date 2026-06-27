@@ -157,7 +157,7 @@ if $jq_ok; then
     cmds="$cmds | . + [{id:\"cf_token\",label:\"Re-run wrangler login (could not read stored Cloudflare token)\",kind:\"login\",cmd:\"wrangler login\"}]"
   else
     if ! $cf_subdomain_ok; then
-      cmds="$cmds | . + [{id:\"cf_subdomain\",label:\"Claim your free workers.dev subdomain\",kind:\"click\",cmd:\"https://dash.cloudflare.com/$cf_account_id/workers/onboarding\"}]"
+      cmds="$cmds | . + [{id:\"cf_subdomain\",label:\"Claim your free workers.dev subdomain\",kind:\"click\",cmd:\"https://dash.cloudflare.com/?to=/:account/workers-and-pages\"}]"
     fi
     if ! $cf_r2_enabled; then
       cmds="$cmds | . + [{id:\"cf_r2\",label:\"Enable R2 on your Cloudflare account (one click, free up to 10GB)\",kind:\"click\",cmd:\"https://dash.cloudflare.com/$cf_account_id/r2\"}]"
