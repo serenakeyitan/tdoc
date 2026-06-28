@@ -5,13 +5,26 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: this workflow only reads the repo and runs tests. It never
+# needs to write contents, packages, or any other scope. Pinning permissions
+# here means even a compromised step (or action) can't push to the repo or
+# mint a writable token. Critical because this runs on `pull_request` from
+# forks.
+permissions:
+  contents: read
+
 jobs:
   offline:
     name: offline test suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Actions are pinned to a full commit SHA, not a mutable @v4 tag. A tag
+      # can be repointed by a compromised maintainer or a tag-hijack (cf. the
+      # 2025 tj-actions/changed-files incident) and would silently run attacker
+      # code in our PR-triggered pipeline. The trailing comment records the
+      # human-readable version the SHA corresponds to; bump both together.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
       # jq is needed by the CLI tests that drive bin/tdoc-* hermetically.
@@ -39,3 +52,16 @@ jobs:
           bash -n bin/tdoc-pull
           bash -n bin/tdoc-new
           bash -n bin/tdoc-doctor
+      # ShellCheck the credential-handling CLIs. `bash -n` above only catches
+      # syntax errors; ShellCheck catches the dangerous class — unquoted
+      # expansions in a token path, word-splitting in a curl arg, sed on
+      # untrusted input — which is exactly where a script that reads Cloudflare
+      # OAuth tokens and builds Authorization headers gets a real bug.
+      # shellcheck is preinstalled on ubuntu-latest runners.
+      #
+      # SC2034 (unused variable) is excluded: it's pure style hygiene, not a
+      # security/correctness signal, and the existing scripts keep a couple of
+      # intentional scaffolding vars (e.g. HTML_PATH, HAS_JQ). The gate is for
+      # the dangerous classes (quoting/word-splitting/injection), not lint nits.
+      - name: ShellCheck CLIs
+        run: shellcheck --severity=warning --exclude=SC2034 bin/tdoc-publish bin/tdoc-doctor bin/tdoc-pull bin/tdoc-new bin/tdoc-unpublish bin/tdoc-update
