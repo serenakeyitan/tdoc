@@ -27,8 +27,5 @@
     "prompt-native",
     "interactive"
   ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/serenakeyitan/tdoc"
-  }
+  "repository": "https://github.com/serenakeyitan/tdoc"
 }
