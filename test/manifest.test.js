@@ -149,6 +149,41 @@ if (market) {
   });
 }
 
+// --- single-source-of-truth: every version string in the repo must agree ---
+//
+// Version drift has bitten this repo repeatedly: plugin.json fell behind the
+// VERSION file twice, and marketplace.json sat frozen at 0.1.44 while the
+// plugin was 0.7.x (#36). The plugin.json drift guard above covers one pair;
+// this gathers EVERY place a release version can live and asserts they're all
+// equal, so re-introducing any source can't silently diverge. If a new version
+// source is added later, add it here too.
+console.log('\n--- version single-source-of-truth (drift guard) ---');
+
+if (plugin && market) {
+  t('VERSION, plugin.json, and any marketplace version all agree', () => {
+    if (!fs.existsSync(VERSION_FILE)) throw new Error('VERSION file missing');
+    const canonical = fs.readFileSync(VERSION_FILE, 'utf8').trim();
+
+    const sources = [
+      ['VERSION file', canonical],
+      ['plugin.json .version', plugin.version],
+    ];
+    // marketplace top-level version is optional; include it only if present.
+    if ('version' in market) sources.push(['marketplace.json .version', market.version]);
+    // per-plugin versions are forbidden above, but if one sneaks in, fold it
+    // into the equality check so the failure names the real divergence.
+    market.plugins.forEach((p, i) => {
+      if ('version' in p) sources.push([`marketplace.json plugins[${i}].version`, p.version]);
+    });
+
+    const disagree = sources.filter(([, v]) => v !== canonical);
+    if (disagree.length) {
+      const detail = sources.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ');
+      throw new Error(`version sources disagree (canonical = VERSION file ${JSON.stringify(canonical)}): ${detail}`);
+    }
+  });
+}
+
 console.log('');
 if (fail) { console.log(`${pass} passed, ${fail} failed.`); process.exit(1); }
 console.log(`${pass} passed, 0 failed.`);
