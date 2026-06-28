@@ -1,0 +1,44 @@
+name: codeql
+
+# Static taint analysis for the JavaScript surface. The overlay
+# (server/overlay.js) renders untrusted comment text into every reader's
+# browser, and the worker (worker.js) handles untrusted request bodies — the
+# repo's two highest-risk files. The hand-written security tests cover KNOWN
+# XSS/escaping cases; CodeQL catches NEW injection sinks a contributor
+# introduces (a fresh innerHTML/eval/sink the fixed-case tests don't know to
+# look for).
+#
+# JavaScript only — the bash CLIs are covered by shellcheck in test.yml;
+# CodeQL doesn't analyze shell.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so a sink that lands without a PR (or a new CodeQL query) still
+    # gets caught. Monday 07:00 UTC.
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze javascript
+    runs-on: ubuntu-latest
+    permissions:
+      # CodeQL needs to write its findings to the Security tab.
+      security-events: write
+      contents: read
+    steps:
+      # Actions pinned to commit SHAs (see test.yml for why). github/codeql-action
+      # v3 -> codeql-bundle-v2.25.6.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          languages: javascript
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
