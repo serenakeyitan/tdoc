@@ -4,6 +4,45 @@ All notable changes to tdoc are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow the `VERSION`
 file and `.claude-plugin/plugin.json`.
 
+## [0.7.11] - 2026-06-29
+
+Dual-engine code audit (Codex + Claude subagents, every finding adversarially
+verified). Both engines independently flagged the same top cluster.
+
+### Fixed — data loss
+
+- **Reactions silently disappeared on a normal toggle.** A reaction's event id
+  included the add-vs-remove kind, so `add → remove → add` folded to a stale
+  "removed" — the reaction vanished even though the user's last action was to
+  add it. The id also omitted the version, so the same reaction on different
+  document versions clobbered each other (snapshots are supposed to be
+  immutable). Both are fixed by one version-scoped id shared by add and remove;
+  reactions stored before this release are migrated automatically.
+
+### Fixed — security
+
+- **Comment anchor could hijack rendering** (verified in a real browser). A
+  stored anchor id was interpolated into a CSS selector, so a crafted id from a
+  signed-in commenter could anchor a comment onto `<body>` or throw an error
+  that aborted comment rendering for every viewer. Anchors now match by
+  attribute equality — no selector string is ever built from stored data.
+- **CLI slug path traversal.** `tdoc publish` / `pull` / `unpublish` used the
+  slug in filesystem paths and API URLs without validation; a `..` slug escaped
+  the tdoc directory. They now enforce the same kebab-case rule as `tdoc new`.
+- **Hardening:** upload/comment/reaction endpoints validate the slug (and
+  version) before it becomes a storage key; reactions reject reserved object
+  keys as emoji; the upload-token check is constant-time; the sign-in modal
+  escapes its values and only opens https github.com URLs; `published.json`
+  (which holds the upload token) is created `0600` from the start.
+
+### Fixed — robustness
+
+- Comment refresh no longer breaks when the API returns an error body instead
+  of a list; reaction clicks now re-auth on an expired session and surface
+  failures instead of silently dropping; the sign-in flow handles network/edge
+  errors; text highlights re-anchor correctly on browsers without the CSS
+  Custom Highlight API. `tdoc update --check` reports the real commit count.
+
 ## [0.7.10] - 2026-06-28
 
 Four user-facing fixes that landed on `main` after 0.7.9 — most relevant to
