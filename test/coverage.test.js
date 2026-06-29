@@ -86,6 +86,55 @@ t('FOLD: reaction add then remove nets to no reaction', () => {
     'reaction should be gone after add+remove');
 });
 
+// Regression (audit, Codex+Claude agreed): add→remove→add must converge to
+// "reacted", not silently vanish. Old eventEid put the event KIND in the eid,
+// so add and remove lived in two independent dedup slots and folded to a stale
+// "removed" even though the user's last action was add. Now both kinds share
+// one (emoji,by,at_version) eid so the last toggle wins.
+t('FOLD: reaction add→remove→add converges to PRESENT (no data loss)', () => {
+  const c = { id: 'c4b', author: {login:'a'}, created: 't0', created_in: 1, events: [
+    { kind: 'created', at_version: 1, at: 't0', text: 'x', anchor: null },
+    { kind: 'reaction_added',   at_version: 1, at: 't1', emoji: '👍', by: 'u' },
+    { kind: 'reaction_removed', at_version: 1, at: 't2', emoji: '👍', by: 'u' },
+    { kind: 'reaction_added',   at_version: 1, at: 't3', emoji: '👍', by: 'u' },
+  ]};
+  box.backfillEids(c.events);
+  const snap = snapshotAt(c, Infinity);
+  assert(snap.reactions['👍'] && snap.reactions['👍'].includes('u'),
+    'after add→remove→add the reaction must be PRESENT');
+});
+
+// Regression (audit): a reaction on v1 and a different toggle on v3 must NOT
+// clobber each other — snapshots are immutable per version. Old eid omitted
+// at_version, so same emoji/user across versions collided into one slot.
+t('FOLD: same reaction across versions stays independent (snapshot immutability)', () => {
+  const c = { id: 'c4c', author: {login:'a'}, created: 't0', created_in: 1, events: [
+    { kind: 'created', at_version: 1, at: 't0', text: 'x', anchor: null },
+    { kind: 'reaction_added',   at_version: 1, at: 't1', emoji: '🔥', by: 'u' }, // on v1
+    { kind: 'reaction_removed', at_version: 3, at: 't2', emoji: '🔥', by: 'u' }, // un-react on v3
+  ]};
+  box.backfillEids(c.events);
+  // At v1 the reaction is still present; the v3 removal must not reach back.
+  const v1 = snapshotAt(c, 1);
+  assert(v1.reactions['🔥'] && v1.reactions['🔥'].includes('u'),
+    'v1 reaction must survive a later-version removal');
+  // At v3 it is removed.
+  const v3 = snapshotAt(c, 3);
+  assert(!v3.reactions['🔥'] || !v3.reactions['🔥'].includes('u'),
+    'v3 must reflect the removal');
+});
+
+// Regression (audit): backfillEids must MIGRATE a stored old-format reaction
+// eid to the new format, not leave it stale — otherwise reactions created
+// before the fix never converge.
+t('MIGRATE: stale old-format reaction eid is recomputed by backfillEids', () => {
+  const e = { kind: 'reaction_added', at_version: 2, at: 't1', emoji: '🎉', by: 'bob',
+    eid: 'reaction_added:🎉:bob' /* OLD format: kind-in-eid, no at_version */ };
+  box.backfillEids([e]);
+  assert(e.eid === 'reaction:🎉:bob:2',
+    `old-format eid should be migrated; got ${e.eid}`);
+});
+
 t('FOLD: text_edited overrides created text', () => {
   const c = { id: 'c5', author: {login:'a'}, created: 't0', created_in: 1, events: [
     { kind: 'created', at_version: 1, at: 't0', text: 'orig', anchor: null },

@@ -778,9 +778,29 @@ function legacyToEvents(c) {
 // returns true if anything changed. This guarantees dedupEvents (the
 // convergence point) always has an eid to key on.
 function backfillEids(events) {
+  // Reaction/state kinds whose eid is DETERMINISTIC (no random component). Their
+  // eid format changed (kind dropped, at_version added — see eventEid), so
+  // events stored under an old-format eid must be RECOMPUTED, not just filled
+  // when missing. Recomputing is safe because these eids are pure functions of
+  // the event's own fields; one-shot kinds (which embed Math.random) are never
+  // recomputed, only backfilled when absent. Kept inside the function so the
+  // test harness's per-function VM extraction stays self-contained.
+  const DETERMINISTIC_EID_KINDS = new Set([
+    'reaction_added', 'reaction_removed',
+    'reply_reaction_added', 'reply_reaction_removed',
+    'marked_applied', 'marked_open', 'deleted',
+  ]);
   let changed = false;
   if (!Array.isArray(events)) return false;
-  for (const e of events) { if (e && !e.eid) { e.eid = eventEid(e); changed = true; } }
+  for (const e of events) {
+    if (!e) continue;
+    if (!e.eid) { e.eid = eventEid(e); changed = true; continue; }
+    // Migrate events whose deterministic eid format has since changed.
+    if (DETERMINISTIC_EID_KINDS.has(e.kind)) {
+      const want = eventEid(e);
+      if (e.eid !== want) { e.eid = want; changed = true; }
+    }
+  }
   return changed;
 }
 
@@ -986,15 +1006,28 @@ function ensureMigrated(list) {
 // instead of corrupting: every event carries an `eid`, and the fold dedups by
 // it (see dedupEvents). Some events are *naturally idempotent* and get a
 // DETERMINISTIC eid so a concurrent duplicate collapses to one:
-//   reaction_added/removed → reaction:<kind>:<emoji>:<by>   (toggle converges)
+//   reaction add/remove → reaction:<emoji>:<by>:<at_version>      (toggle converges)
+//   reply reaction      → rreaction:<reply_id>:<emoji>:<by>:<at_version>
 //   marked_applied/open/deleted → <kind>:<at_version>       (state, not history)
 // One-shot events (created, reply_added, text_edited, anchor_changed) get a
 // unique eid so each is preserved.
+//
+// Reaction eids deliberately DROP the add-vs-remove kind and INCLUDE at_version:
+//   - dropping kind makes a toggle converge: [add, remove, add] collapses to one
+//     slot whose LAST event (add) wins, instead of add and remove living in two
+//     independent slots that fold to a stale "removed" (the add→remove→add
+//     data-loss bug).
+//   - including at_version keeps each version's reaction independent, so a
+//     reaction on v1 and a different toggle on v3 don't clobber each other
+//     (snapshots stay immutable).
 function eventEid(e) {
   switch (e.kind) {
     case 'reaction_added':
     case 'reaction_removed':
-      return `${e.kind}:${e.emoji}:${e.by}`;
+      return `reaction:${e.emoji}:${e.by}:${e.at_version}`;
+    case 'reply_reaction_added':
+    case 'reply_reaction_removed':
+      return `rreaction:${e.reply_id}:${e.emoji}:${e.by}:${e.at_version}`;
     case 'marked_applied':
     case 'marked_open':
     case 'deleted':
@@ -1059,6 +1092,27 @@ function parseVersionParam(url) {
   return Number.isFinite(n) && n >= 0 ? n : Infinity;
 }
 
+// Coerce a version from a request body to a non-negative integer, defaulting to
+// `fallback` (1) for missing/invalid input. Unlike `Number(version) || 1`, this
+// preserves a legitimate 0 — matching parseVersionParam's accept rule — so a
+// body-driven write can't silently land on the wrong snapshot.
+function coerceBodyVersion(version, fallback = 1) {
+  const n = Number(version);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// Slugs are used as R2/KV key segments and Durable Object names. Constrain them
+// to a strict kebab-case allowlist so a request body can't escape the intended
+// `docs/<slug>/…` keyspace or inject odd characters into a storage key.
+function isValidSlug(slug) {
+  return typeof slug === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug);
+}
+
+// Object keys that, if accepted as a reaction emoji, would resolve to inherited
+// Object.prototype members when used as a reaction bucket key — throwing or
+// polluting the fold. Rejected at the /api/reactions boundary.
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor', 'hasOwnProperty', 'toString', 'valueOf', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString']);
+
 // ---- GitHub helpers ----
 
 async function ghPost(path, formObj) {
@@ -1096,10 +1150,27 @@ async function ghUser(token) {
   return r.json();
 }
 
-function requireUploadAuth(req, env) {
+// Constant-time string compare. Hashes both sides with SHA-256 and XOR-folds
+// the digests, so it neither short-circuits on the first differing byte nor
+// leaks length — removing the (theoretical, network-noise-dominated) timing
+// side channel of a raw `===` on the shared secret.
+async function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const enc = new TextEncoder();
+  const [ha, hb] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(a)),
+    crypto.subtle.digest('SHA-256', enc.encode(b)),
+  ]);
+  const va = new Uint8Array(ha), vb = new Uint8Array(hb);
+  let diff = 0;
+  for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
+  return diff === 0;
+}
+
+async function requireUploadAuth(req, env) {
   const auth = req.headers.get('authorization') || '';
   const m = auth.match(/^Bearer\s+(.+)$/);
-  if (!m || !env.TDOC_UPLOAD_TOKEN || m[1] !== env.TDOC_UPLOAD_TOKEN) {
+  if (!m || !env.TDOC_UPLOAD_TOKEN || !(await timingSafeEqual(m[1], env.TDOC_UPLOAD_TOKEN))) {
     return json({ error: 'unauthorized' }, { status: 401 });
   }
   return null;
@@ -1655,9 +1726,10 @@ export default {
       try { body = await req.json(); } catch {}
       const { slug, version, anchor, text: commentText, parent_id } = body;
       if (!slug || !commentText) return json({ error: 'slug and text required' }, { status: 400 });
+      if (!isValidSlug(slug)) return json({ error: 'invalid_slug' }, { status: 400 });
       const author = { login: s.login, avatar_url: s.avatar_url, name: s.name };
       const created = new Date().toISOString();
-      const V = Number(version) || 1;
+      const V = coerceBodyVersion(version);
       // Serialized through the per-slug DO (mutation logic lives once in
       // applyCommentOp). create + reply are both id-stamped here so the
       // response is deterministic regardless of where the write runs.
@@ -1699,7 +1771,7 @@ export default {
     // tenant so this is safe). Triggered by ?all=1 on DELETE /api/comments.
     if (p === '/api/comments' && method === 'DELETE'
         && url.searchParams.get('all') === '1') {
-      const unauth = requireUploadAuth(req, env);
+      const unauth = await requireUploadAuth(req, env);
       if (unauth) return unauth;
       const slug = url.searchParams.get('slug');
       if (!slug) return json({ error: 'slug required' }, { status: 400 });
@@ -1760,8 +1832,13 @@ export default {
       try { body = await req.json(); } catch {}
       const { slug, comment_id, emoji, version } = body;
       if (!slug || !comment_id || !emoji) return json({ error: 'slug, comment_id, emoji required' }, { status: 400 });
-      if (emoji.length > 8 || emoji.length === 0) return json({ error: 'invalid_emoji' }, { status: 400 });
-      const V = Number(version) || 1;
+      if (!isValidSlug(slug)) return json({ error: 'invalid_slug' }, { status: 400 });
+      if (typeof emoji !== 'string' || emoji.length > 8 || emoji.length === 0) return json({ error: 'invalid_emoji' }, { status: 400 });
+      // `emoji` is used as an object key in the reaction fold; reject keys that
+      // would resolve to Object.prototype members (e.g. `valueOf`, `toString`,
+      // `__proto__`) and throw or pollute when read as a reaction bucket.
+      if (RESERVED_OBJECT_KEYS.has(emoji)) return json({ error: 'invalid_emoji' }, { status: 400 });
+      const V = coerceBodyVersion(version);
       // No upstream read: the toggle (add vs remove) is decided inside the
       // serialized write so concurrent toggles can't both add. Any signed-in
       // user may react, so there's no author check to do here.
@@ -1779,7 +1856,7 @@ export default {
     // a visible badge on the reply and also flips the parent comment's
     // status to 'applied' / 'open' so the dashboard reflects it.
     if (p === '/api/agent/reply' && method === 'POST') {
-      const unauth = requireUploadAuth(req, env);
+      const unauth = await requireUploadAuth(req, env);
       if (unauth) return unauth;
       let body = {};
       try { body = await req.json(); } catch {}
@@ -1827,7 +1904,7 @@ export default {
 
     // ---- admin upload (from `tdoc publish`) ----
     if (p === '/api/upload' && method === 'POST') {
-      const unauth = requireUploadAuth(req, env);
+      const unauth = await requireUploadAuth(req, env);
       if (unauth) return unauth;
       let body = {};
       try { body = await req.json(); } catch {}
@@ -1836,12 +1913,18 @@ export default {
       // html must be a string — a non-string doc would throw inside stampAids()
       // and surface as a generic 500 (Codex P3).
       if (typeof doc !== 'string') return json({ error: 'html must be a string' }, { status: 400 });
+      // slug + version become R2/KV key segments and the DO name. Validate them
+      // (even though this route is upload-token-gated) so a malformed body can't
+      // escape the `docs/<slug>/v<N>/` keyspace or build a junk storage key.
+      if (!isValidSlug(slug)) return json({ error: 'invalid_slug' }, { status: 400 });
+      const verNum = Number(version);
+      if (!Number.isInteger(verNum) || verNum < 1) return json({ error: 'invalid_version' }, { status: 400 });
       // Identity-stamp every commentable artifact with a content-hashed
       // data-tdoc-aid. The SAME artifact in a different version has the
       // SAME aid — so a comment anchored by aid resolves identity-first
       // and cannot drift onto a different artifact.
       const { html: stampedHtml, aids } = stampAids(doc);
-      const r2Key = `docs/${slug}/v${version}/index.html`;
+      const r2Key = `docs/${slug}/v${verNum}/index.html`;
       try {
         await env.DOCS.put(r2Key, stampedHtml, {
           httpMetadata: { contentType: 'text/html; charset=utf-8' },
@@ -1884,18 +1967,18 @@ export default {
         // merge is non-destructive (add-by-id-if-absent; never overwrite/delete
         // worker comments), mirroring tdoc-pull so round-trips converge.
         const res = await mutateComments(env, slug, {
-          kind: 'publish_merge', slug, localComments: localComments || [], aids, version,
+          kind: 'publish_merge', slug, localComments: localComments || [], aids, version: verNum,
         });
         mergedLocal = (res.body && res.body.mergedComments) || 0;
       } catch (e) {
         console.error('[upload] comment merge/reconcile failed (non-fatal):', e.message);
       }
-      return json({ ok: true, url: `/d/${slug}/v/${version}`, size: verify.size, aids: aids.length, mergedComments: mergedLocal });
+      return json({ ok: true, url: `/d/${slug}/v/${verNum}`, size: verify.size, aids: aids.length, mergedComments: mergedLocal });
     }
 
     // ---- admin delete ----
     if (p === '/api/doc' && method === 'DELETE') {
-      const unauth = requireUploadAuth(req, env);
+      const unauth = await requireUploadAuth(req, env);
       if (unauth) return unauth;
       const slug = url.searchParams.get('slug');
       if (!slug) return json({ error: 'slug required' }, { status: 400 });
