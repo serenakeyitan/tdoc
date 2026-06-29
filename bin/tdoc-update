@@ -64,7 +64,8 @@ git --no-pager log --oneline "$LOCAL..$REMOTE" | sed 's/^/  /'
 echo
 
 if [ "$CHECK" = "1" ]; then
-  echo "[tdoc-update] --check: not applying. ${#} commit(s) ahead."
+  # ${#} would be the CLI arg count (1 for `--check`), not the commit count.
+  echo "[tdoc-update] --check: not applying. $(git rev-list --count "$LOCAL..$REMOTE") commit(s) ahead."
   exit 0
 fi
 
@@ -125,8 +126,14 @@ if [ -f "$CONFIG_FILE" ]; then
   fi
   echo
   if [ "$YES" = "1" ]; then
-    echo "[tdoc-update] --yes: redeploying worker (and uploading $PUBLISHED_SLUG)..."
-    "$SKILL_DIR/bin/tdoc-publish" "${PUBLISHED_SLUG:-}" || true
+    if [ -n "$PUBLISHED_SLUG" ]; then
+      echo "[tdoc-update] --yes: redeploying worker (and uploading $PUBLISHED_SLUG)..."
+      "$SKILL_DIR/bin/tdoc-publish" "$PUBLISHED_SLUG" || true
+    else
+      # No local doc to re-publish — calling tdoc-publish with an empty slug
+      # would just hit its usage error (silently, via || true). Skip cleanly.
+      echo "[tdoc-update] --yes: code updated, but no local doc found to redeploy; skipping upload."
+    fi
   else
     echo "[tdoc-update] you have a published worker. To pick up code changes, redeploy with:"
     echo "    $SKILL_DIR/bin/tdoc-publish ${PUBLISHED_SLUG:-<slug>}"

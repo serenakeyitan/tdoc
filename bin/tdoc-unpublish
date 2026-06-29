@@ -6,6 +6,12 @@ set -euo pipefail
 
 SLUG="${1:-}"
 if [ -z "$SLUG" ]; then echo "usage: tdoc-unpublish <slug>" >&2; exit 1; fi
+# Validate before $SLUG goes into the Cloudflare API DELETE query. Same
+# kebab-case rule as tdoc-new; [a-z0-9-] is URL-safe.
+if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+  echo "[tdoc] invalid slug '$SLUG' — must be lowercase kebab-case (a-z, 0-9, -)." >&2
+  exit 1
+fi
 
 CONFIG_FILE="$HOME/.tdoc/published.json"
 if [ ! -f "$CONFIG_FILE" ]; then

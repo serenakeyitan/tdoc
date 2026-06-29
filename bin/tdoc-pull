@@ -12,6 +12,14 @@ set -euo pipefail
 
 SLUG="${1:-}"
 if [ -z "$SLUG" ]; then echo "usage: tdoc-pull <slug>" >&2; exit 1; fi
+# Validate before $SLUG becomes a filesystem path (OUT="$TDOC_DIR/$SLUG/…") or a
+# raw query value in the Cloudflare API URL. A `..` slug would write
+# comments.json outside TDOC_DIR. Same kebab-case rule as tdoc-new; the allowed
+# charset [a-z0-9-] is also URL-safe, so no extra encoding is needed.
+if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+  echo "[tdoc] invalid slug '$SLUG' — must be lowercase kebab-case (a-z, 0-9, -)." >&2
+  exit 1
+fi
 
 CONFIG_FILE="$HOME/.tdoc/published.json"
 TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"

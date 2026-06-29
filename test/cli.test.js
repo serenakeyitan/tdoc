@@ -92,5 +92,29 @@ t('tdoc-new --force preserves the existing doc when new HTML is INVALID [the bug
   }
 });
 
+// ---- slug validation (audit: path traversal via unvalidated slug) ----
+// tdoc-publish/pull/unpublish used $SLUG in filesystem paths and curl URLs
+// without validation, so a `..` slug escaped TDOC_DIR. Each must now reject a
+// non-kebab-case slug BEFORE any side effect.
+t('publish/pull/unpublish reject traversal + non-kebab slugs', () => {
+  const env = { ...process.env, TDOC_DIR: '/tmp/tdoc-slugtest-nonexistent', HOME: '/tmp/tdoc-slugtest-home' };
+  const bad = ['../private', 'a/../b', 'UPPER', 'has space', 'trailing-', '-leading', 'with/slash'];
+  for (const cli of ['tdoc-publish', 'tdoc-pull', 'tdoc-unpublish']) {
+    for (const slug of bad) {
+      const r = spawnSync(path.join(BIN, cli), [slug], { env, encoding: 'utf8', timeout: 15000 });
+      assert(r.status !== 0, `${cli} accepted bad slug '${slug}' (exit 0)`);
+      assert(/invalid slug/i.test(r.stderr || ''), `${cli} '${slug}': expected 'invalid slug' rejection, got stderr: ${r.stderr}`);
+    }
+  }
+});
+
+t('publish accepts a valid kebab-case slug (passes validation, fails later on missing doc)', () => {
+  const env = { ...process.env, TDOC_DIR: '/tmp/tdoc-slugtest-nonexistent' };
+  const r = spawnSync(path.join(BIN, 'tdoc-publish'), ['valid-slug-123'], { env, encoding: 'utf8', timeout: 15000 });
+  // It should get PAST slug validation (no 'invalid slug') and fail on the
+  // missing doc instead — proving valid slugs aren't over-rejected.
+  assert(!/invalid slug/i.test(r.stderr || ''), `valid slug was wrongly rejected: ${r.stderr}`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
