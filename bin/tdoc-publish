@@ -21,6 +21,14 @@ if [ -z "$SLUG" ]; then
   echo "usage: tdoc-publish <slug>" >&2
   exit 1
 fi
+# Validate the slug BEFORE it becomes a filesystem path or a URL query value.
+# Same kebab-case rule tdoc-new enforces. Without this a `..` slug escapes
+# TDOC_DIR (read/publish an arbitrary dir) and an unsafe slug injects into the
+# Cloudflare API query string.
+if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+  echo "[tdoc] invalid slug '$SLUG' — must be lowercase kebab-case (a-z, 0-9, -)." >&2
+  exit 1
+fi
 
 SKILL_DIR="$HOME/.claude/skills/tdoc"
 TDOC_DIR="${TDOC_DIR:-$HOME/tdocs}"
@@ -285,16 +293,22 @@ first_time_setup() {
   echo "[tdoc] setting TDOC_UPLOAD_TOKEN secret..."
   (cd "$WORKER_DIR" && echo "$token" | wrangler secret put TDOC_UPLOAD_TOKEN)
 
-  # 9. save config
-  jq -n \
-    --arg sub "$SUBDOMAIN" \
-    --arg tok "$token" \
-    --arg kv "$kv_id" \
-    --arg worker "$worker_name" \
-    --arg host "$PUBLIC_HOST" \
-    --arg custom "$CUSTOM_DOMAIN" \
-    '{subdomain:$sub, upload_token:$tok, kv_id:$kv, worker:$worker, public_host:$host, custom_domain:$custom, created: now | todate}' \
-    > "$CONFIG_FILE"
+  # 9. save config. Create it 0600 FROM THE START (umask 077 in a subshell) — a
+  # plain `> "$CONFIG_FILE"` under the default umask 022 would briefly leave the
+  # file (which holds TDOC_UPLOAD_TOKEN) world-readable until the chmod ran. The
+  # explicit chmod 600 stays as belt-and-suspenders for a pre-existing file.
+  (
+    umask 077
+    jq -n \
+      --arg sub "$SUBDOMAIN" \
+      --arg tok "$token" \
+      --arg kv "$kv_id" \
+      --arg worker "$worker_name" \
+      --arg host "$PUBLIC_HOST" \
+      --arg custom "$CUSTOM_DOMAIN" \
+      '{subdomain:$sub, upload_token:$tok, kv_id:$kv, worker:$worker, public_host:$host, custom_domain:$custom, created: now | todate}' \
+      > "$CONFIG_FILE"
+  )
   chmod 600 "$CONFIG_FILE"
 
   if [ -n "$CUSTOM_DOMAIN" ]; then

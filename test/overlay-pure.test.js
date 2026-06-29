@@ -36,14 +36,15 @@ function sliceFn(name) {
   return src.slice(start, i);
 }
 
-const box = {};
+// isGithubHttpsUrl uses the global URL constructor; expose it in the sandbox.
+const box = { URL };
 vm.createContext(box);
 vm.runInContext([
   'escapeHtml', 'normalizeNeedle', 'normalizeContext', 'normalizeQuery',
-  'commonPrefixLen', 'commonSuffixLen',
+  'commonPrefixLen', 'commonSuffixLen', 'isGithubHttpsUrl',
 ].map(sliceFn).join('\n\n'), box);
 const { escapeHtml, normalizeNeedle, normalizeContext, normalizeQuery,
-        commonPrefixLen, commonSuffixLen } = box;
+        commonPrefixLen, commonSuffixLen, isGithubHttpsUrl } = box;
 
 console.log('overlay-pure (#23 testable surface)');
 
@@ -89,6 +90,21 @@ t('commonSuffixLen counts the shared trailing run', () => {
 t('prefix/suffix handle no-overlap', () => {
   assert(commonPrefixLen('abc', 'xyz') === 0);
   assert(commonSuffixLen('abc', 'xyz') === 0);
+});
+
+// isGithubHttpsUrl — audit fix: startDeviceFlow only window.open()s the
+// verification URL if it's an https github.com URL, never an arbitrary string.
+t('isGithubHttpsUrl accepts https github.com URLs', () => {
+  assert(isGithubHttpsUrl('https://github.com/login/device') === true);
+  assert(isGithubHttpsUrl('https://github.com') === true);
+});
+t('isGithubHttpsUrl rejects non-github / non-https / junk', () => {
+  assert(isGithubHttpsUrl('http://github.com/login/device') === false, 'http rejected');
+  assert(isGithubHttpsUrl('https://evil.com/login') === false, 'other host rejected');
+  assert(isGithubHttpsUrl('https://github.com.evil.com') === false, 'suffix-spoof rejected');
+  assert(isGithubHttpsUrl('javascript:alert(1)') === false, 'js scheme rejected');
+  assert(isGithubHttpsUrl('not a url') === false, 'garbage rejected');
+  assert(isGithubHttpsUrl(null) === false, 'null rejected');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

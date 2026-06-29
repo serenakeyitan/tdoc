@@ -1063,6 +1063,18 @@
     while (i < min && a[i] === b[i]) i++;
     return i;
   }
+  // Find the element whose data-tdoc-aid EQUALS `aid`, without ever putting the
+  // (untrusted, commenter-supplied) aid into a selector string. Returns the
+  // first match or null.
+  function matchByAid(aid) {
+    if (aid == null) return null;
+    const target = String(aid);
+    const all = document.querySelectorAll('[data-tdoc-aid]');
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].getAttribute('data-tdoc-aid') === target) return all[i];
+    }
+    return null;
+  }
   function findElement(anchor) {
     if (!anchor) return null;
     // Server-side reconciliation may have marked the anchor as lost — the
@@ -1084,7 +1096,13 @@
     if (fromSelector && !aidCandidates.includes(fromSelector)) aidCandidates.push(fromSelector);
     if (aidCandidates.length) {
       for (const aid of aidCandidates) {
-        const byAid = document.querySelector(`[data-tdoc-aid="${aid}"]`);
+        // Match by attribute EQUALITY, never by interpolating the aid into a
+        // selector string. `aid` is server-stored anchor data a commenter can
+        // craft; building `[data-tdoc-aid="${aid}"]` lets a value like
+        // `x"], body, [...` break out of the attribute selector (anchor onto
+        // the wrong element) or throw an uncaught SyntaxError that aborts
+        // refreshComments for every viewer. Equality match can do neither.
+        const byAid = matchByAid(aid);
         if (byAid) return byAid;
       }
       // Recorded aid(s), none present in this DOM → unanchored, never fallback.
@@ -1320,11 +1338,7 @@
         e.stopPropagation();
         if (isFork) return; // read-only mode
         if (isPublished && !identity) { startDeviceFlow(); return; }
-        await fetch('/api/reactions', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, comment_id: chip.dataset.targetId, emoji: chip.dataset.emoji, version })
-        });
-        await refreshComments();
+        if (await postReaction(chip.dataset.targetId, chip.dataset.emoji)) await refreshComments();
       };
     });
     card.querySelectorAll('.tdoc-react-add').forEach(addBtn => {
@@ -1337,6 +1351,30 @@
 
     card.addEventListener('click', (e) => { e.stopPropagation(); setActiveComment(comment.id); });
     return card;
+  }
+
+  // Submit a reaction toggle. Centralizes error handling the two call sites
+  // (react chip + emoji picker) were missing: on an expired session the server
+  // returns 401 — re-auth instead of silently dropping the click; on network
+  // failure, swallow rather than leaving an unhandled promise rejection.
+  // Returns true if the caller should refresh.
+  async function postReaction(targetId, emoji) {
+    try {
+      const r = await fetch('/api/reactions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug, comment_id: targetId, emoji, version }),
+      });
+      if (r.status === 401) { if (isPublished) startDeviceFlow(); return false; }
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        alert('Could not react: ' + (err.error || err.message || `HTTP ${r.status}`));
+        return false;
+      }
+      return true;
+    } catch (e) {
+      alert('Could not react: network error');
+      return false;
+    }
   }
 
   // ========== Emoji picker ==========
@@ -1367,11 +1405,7 @@
         e.stopPropagation();
         const emoji = b.dataset.emoji;
         closeEmojiPicker();
-        await fetch('/api/reactions', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, comment_id: targetId, emoji, version })
-        });
-        await refreshComments();
+        if (await postReaction(targetId, emoji)) await refreshComments();
       };
     });
   }
@@ -1594,17 +1628,21 @@
     } else {
       try {
         const r = await fetch(`/api/comments?slug=${encodeURIComponent(slug)}&version=${version}`);
-        list = await r.json();
+        // The endpoint returns an array on success but an error ENVELOPE
+        // ({error:...}) on 4xx/5xx. Guard the shape so a non-array body can't
+        // throw on .filter() below and abort all comment rendering.
+        const body = r.ok ? await r.json() : null;
+        list = Array.isArray(body) ? body : [];
       } catch { list = []; }
     }
-    state.activeComments = list.filter(c => c.status !== 'resolved');
+    state.activeComments = (Array.isArray(list) ? list : []).filter(c => c && c.status !== 'resolved');
     document.body.classList.toggle('tdoc-has-comments', state.activeComments.length > 0);
     document.body.dataset.tdocReady = '1';
 
     const fabCount = document.getElementById('tdoc-fab-count');
     if (fabCount) fabCount.textContent = state.activeComments.length;
 
-    const textCache = state.activeComments.some(c => (c.anchor?.kind || (c.anchor?.text ? 'text' : null)) === 'text')
+    let textCache = state.activeComments.some(c => (c.anchor?.kind || (c.anchor?.text ? 'text' : null)) === 'text')
       ? collectTextNodes() : null;
     for (const comment of state.activeComments) {
       const kind = comment.anchor?.kind || (comment.anchor?.text ? 'text' : null);
@@ -1619,6 +1657,11 @@
               span.addEventListener('click', (e) => { e.stopPropagation(); setActiveComment(comment.id); });
               span.style.cursor = 'pointer';
               state.anchorMarks.set(comment.id, { kind: 'text', el: span });
+              // surroundContents() split the text node, invalidating the cached
+              // node list — recompute so later text comments don't anchor
+              // against stale nodes. (HIGHLIGHT_API path doesn't mutate the DOM,
+              // so it can keep sharing one cache.)
+              textCache = collectTextNodes();
             }
           }
         }
@@ -1689,13 +1732,33 @@
   let pollInterval = 5;
   async function startDeviceFlow() {
     if (!isPublished) return;
-    const r = await fetch('/api/auth/device/start', { method: 'POST' });
-    const data = await r.json();
-    if (data.error) { alert('Sign-in error: ' + (data.message || data.error)); return; }
+    let data;
+    try {
+      const r = await fetch('/api/auth/device/start', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      data = await r.json();
+    } catch (e) {
+      // Network failure or a non-JSON edge error (e.g. an HTML 502) must not
+      // leave an unhandled promise rejection with no feedback.
+      alert('Sign-in error: could not reach the sign-in service. Please try again.');
+      return;
+    }
+    if (!data || data.error || !data.user_code || !data.verification_uri) {
+      alert('Sign-in error: ' + ((data && (data.message || data.error)) || 'unexpected response'));
+      return;
+    }
     showDeviceModal(data);
-    window.open(data.verification_uri, '_blank');
+    // Only open the verification URL if it's an https GitHub URL — never window.open an
+    // arbitrary string from the response.
+    if (isGithubHttpsUrl(data.verification_uri)) window.open(data.verification_uri, '_blank');
     pollInterval = Math.max(5, data.interval || 5);
     schedulePoll(data.device_code);
+  }
+  function isGithubHttpsUrl(u) {
+    try {
+      const url = new URL(String(u));
+      return url.protocol === 'https:' && /(^|\.)github\.com$/.test(url.hostname);
+    } catch { return false; }
   }
   function schedulePoll(device_code) {
     pollTimer = setTimeout(() => pollDevice(device_code), pollInterval * 1000);
@@ -1708,8 +1771,8 @@
       <div class="tdoc-modal">
         <h3>Sign in with GitHub</h3>
         <div class="step"><span class="n">1</span><span>Copy this code:</span></div>
-        <div class="code" id="tdoc-user-code">${data.user_code}</div>
-        <div class="step"><span class="n">2</span><span>Paste it at <b>${data.verification_uri}</b> (opened in a new tab) and approve.</span></div>
+        <div class="code" id="tdoc-user-code">${escapeHtml(data.user_code)}</div>
+        <div class="step"><span class="n">2</span><span>Paste it at <b>${escapeHtml(data.verification_uri)}</b> (opened in a new tab) and approve.</span></div>
         <div class="step"><span class="n">3</span><span class="status" id="tdoc-poll-status">Waiting for you to approve…</span></div>
         <div class="actions"><button id="tdoc-modal-cancel">Cancel</button></div>
       </div>`;
