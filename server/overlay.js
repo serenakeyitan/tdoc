@@ -245,6 +245,13 @@
   .tdoc-margin-comment { position: absolute; width: 280px; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); font: 13px system-ui, sans-serif; transition: box-shadow .15s, transform .15s; z-index: 999996; pointer-events: auto; }
   .tdoc-margin-comment.active { box-shadow: 0 4px 16px rgba(22,82,240,0.18); border-color: #1652f0; }
   .tdoc-margin-comment.tdoc-unanchored { border-style: dashed; }
+  /* A resolved (agent-applied) comment whose anchor text was rewritten is the
+     EXPECTED outcome, not an error — don't alarm with the dashed "lost" look or
+     push the re-anchor affordance. Keep it solid and quiet. */
+  .tdoc-margin-comment.tdoc-resolved.tdoc-unanchored { border-style: solid; }
+  .tdoc-margin-comment.tdoc-resolved.tdoc-unanchored .tdoc-reanchor-btn { display: none; }
+  /* Parent-level resolved chip (distinct from the per-reply status chip). */
+  .tdoc-resolved-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; margin: 0 0 8px; background: #e8f5ed; color: #1a7340; }
   .tdoc-reanchor-btn { display: none; font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 6px; cursor: pointer; background: none; border: none; padding: 0; text-align: left; }
   .tdoc-margin-comment.tdoc-unanchored .tdoc-reanchor-btn { display: block; }
   /* Anchored cards also expose a "move anchor" action when they're active. */
@@ -1233,10 +1240,22 @@
     const canDelete = !isFork && (!isPublished || (identity && comment.author && identity.login === comment.author.login));
     const replies = Array.isArray(comment.replies) ? comment.replies : [];
     const hasReactions = comment.reactions && Object.values(comment.reactions).some(u => u && u.length > 0);
+    // A comment the agent has marked applied is "resolved". Surface it on the
+    // parent card (status === 'applied' set by the worker's marked_applied event),
+    // and expand its replies so the agent's resolution is visible, not buried.
+    const isResolved = comment.status === 'applied';
+    const verdict = comment._agentVerdict || 'applied';
+    const resolvedChip = isResolved
+      ? `<span class="tdoc-resolved-chip" title="Resolved by tdoc-agent${comment.applied_in ? ' in v' + escapeHtml(String(comment.applied_in)) : ''}">✓ ${
+          verdict === 'partial' ? 'partially fixed' : verdict === 'question' ? 'needs input' : 'fixed'
+        }${comment.applied_in ? ' · v' + escapeHtml(String(comment.applied_in)) : ''}</span>`
+      : '';
+    if (isResolved) card.classList.add('tdoc-resolved');
     card.innerHTML = `
       ${isFork ? '' : `<div class="tdoc-anchor-actions">
         <button class="tdoc-reanchor-btn" type="button" data-id="${escapeHtml(comment.id)}"><span class="tdoc-reanchor-unanchored">unanchored — click to re-anchor</span><span class="tdoc-reanchor-anchored">↻ move anchor</span></button>
       </div>`}
+      ${resolvedChip}
       ${renderAuthor(comment.author)}
       <div class="text">${escapeHtml(comment.text)}</div>
       ${hasReactions ? renderReactionsRow(comment) : ''}
@@ -1249,13 +1268,20 @@
           ${canDelete ? `<span class="del" data-id="${escapeHtml(comment.id)}">delete</span>` : ''}
         </span>
       </div>
-      ${replies.length ? `
-        <div class="tdoc-replies-toggle" data-id="${escapeHtml(comment.id)}">
+      ${replies.length ? (() => {
+        // Replies are COLLAPSED by default — including agent replies and
+        // resolved threads. The parent already carries a "✓ fixed · vN" chip,
+        // so the resolution is visible at a glance; the full agent reply stays
+        // folded under "N reply" until the reader expands it. Keeps the margin
+        // column quiet instead of stacking long bot replies inline.
+        const autoOpen = false;
+        return `
+        <div class="tdoc-replies-toggle${autoOpen ? ' open' : ''}" data-id="${escapeHtml(comment.id)}">
           <svg class="chev" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
           ${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}
         </div>
-        <div class="tdoc-replies">${replies.map(r => renderReply(r)).join('')}</div>
-      ` : ''}
+        <div class="tdoc-replies${autoOpen ? ' open' : ''}">${replies.map(r => renderReply(r)).join('')}</div>
+      `; })() : ''}
       ${isFork ? '' : `<div class="tdoc-reply-form" data-parent-id="${escapeHtml(comment.id)}">
         <textarea placeholder="Reply…"></textarea>
         <div class="tdoc-reply-form-foot">
@@ -1501,10 +1527,11 @@
         row.card.classList.add('tdoc-unanchored');
         // Ghost marker shows where the deleted text USED to be — only
         // meaningful when the anchor was lost involuntarily (the doc was
-        // rewritten). When the user explicitly removed the anchor via the
-        // "Remove anchor" pill, we set kind:'none' and shouldn't render a
-        // ghost at all (they intentionally cleared it).
-        if (row.c.anchor?.kind !== 'none') {
+        // rewritten). We suppress it in two cases:
+        //   - the user explicitly removed the anchor (kind:'none'), or
+        //   - the comment is RESOLVED (status:'applied') — an addressed
+        //     comment shouldn't leave a dash sitting at its old spot.
+        if (row.c.anchor?.kind !== 'none' && row.c.status !== 'applied') {
           renderGhostMarker(row.c.id, articleTop + row.c.anchor.fallback.ratio * articleHeight);
         } else {
           removeGhostMarker(row.c.id);
@@ -1645,8 +1672,18 @@
     let textCache = state.activeComments.some(c => (c.anchor?.kind || (c.anchor?.text ? 'text' : null)) === 'text')
       ? collectTextNodes() : null;
     for (const comment of state.activeComments) {
+      // Resolved comments (agent marked them applied) keep their margin card
+      // and "✓ fixed" chip, but we do NOT draw their in-text anchor: no gold
+      // highlight and no dashed ghost marker. Once a comment is addressed the
+      // dash just sits at the old spot as visual noise. Skipping the anchor
+      // mark here means rebuildSharedHighlights() and repositionCards() never
+      // see a mark for it, so no highlight/ghost is produced; the card falls
+      // through to fallback-ratio (or tail) placement.
+      const isResolvedComment = comment.status === 'applied';
       const kind = comment.anchor?.kind || (comment.anchor?.text ? 'text' : null);
-      if (kind === 'text') {
+      if (isResolvedComment) {
+        // no-op: intentionally leave anchorMarks empty for this comment
+      } else if (kind === 'text') {
         const range = findTextRange(comment.anchor, textCache);
         if (range) {
           if (HIGHLIGHT_API) {
