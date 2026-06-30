@@ -122,6 +122,38 @@ function readCommentFile(file) {
   const v = readJson(file, []);
   return Array.isArray(v) ? v : [];
 }
+
+// Fold the flat comment list to a per-version SNAPSHOT, matching the worker's
+// event-fold semantics (worker.js snapshotAt): reading a doc "as of version N"
+// shows each comment exactly as it existed then. The local store is a flat
+// record (not an event log), but it carries enough fields to fold:
+//   - created_in > N        → the comment didn't exist yet → hide it.
+//   - applied_in > N        → it wasn't resolved yet at N → show status 'open'
+//                             and drop applied_in (no "✓ fixed" on a past version).
+//   - replies made after N  → fold out (a reply added in v4 isn't on v3).
+// Without this the local dev server returned the LATEST status for every
+// version, so resolving a comment in v4 made it look resolved on v2/v3 too.
+function foldCommentsAtVersion(comments, version) {
+  const V = Number(version);
+  if (!Number.isFinite(V)) return comments; // no version → latest state (back-compat)
+  const out = [];
+  for (const c of comments) {
+    const createdIn = Number(c.created_in != null ? c.created_in : c.version) || 1;
+    if (createdIn > V) continue; // didn't exist yet at version V
+    const appliedIn = c.applied_in != null ? Number(c.applied_in) : null;
+    const resolvedByV = c.status === 'applied' && appliedIn != null && appliedIn <= V;
+    const snap = {
+      ...c,
+      status: resolvedByV ? 'applied' : 'open',
+      applied_in: resolvedByV ? appliedIn : undefined,
+      replies: Array.isArray(c.replies)
+        ? c.replies.filter(r => (Number(r.version != null ? r.version : createdIn) || createdIn) <= V)
+        : [],
+    };
+    out.push(snap);
+  }
+  return out;
+}
 function escHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -188,7 +220,11 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/comments' && req.method === 'GET') {
     const slug = safeSlug(url.searchParams.get('slug'));
     if (!slug) return json(res, 400, { error: 'invalid or missing slug' });
-    return json(res, 200, readCommentFile(path.join(ROOT, slug, 'comments.json')));
+    const all = readCommentFile(path.join(ROOT, slug, 'comments.json'));
+    // Fold to the requested version's snapshot so past versions keep their
+    // historical status (matches the worker). Missing version → latest state.
+    const ver = url.searchParams.get('version');
+    return json(res, 200, ver != null ? foldCommentsAtVersion(all, ver) : all);
   }
 
   if (p === '/api/comments' && req.method === 'POST') {
