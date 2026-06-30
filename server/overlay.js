@@ -1582,11 +1582,15 @@
     else if (state.hoverId) positionFloatingCard(state.hoverId);
   }
 
-  // Pins whose centers are closer than this on Y merge into one count badge.
-  // Must exceed PIN_SIZE so two separate pins can't visually overlap — anything
-  // tighter becomes a cluster instead.
-  const CLUSTER_GAP = PIN_SIZE + 6; // 34px
-  const PIN_MIN_GAP = PIN_SIZE + 4; // min center-to-center between rendered pins
+  // Clustering and overlap-prevention are SEPARATE concerns:
+  //  - SAME_LINE_GAP: only comments truly on the same line (centers within this)
+  //    merge into a count badge. Tight, so a roomy doc shows individual pins.
+  //  - PIN_MIN_GAP: minimum center-to-center spacing. Pins that would otherwise
+  //    overlap are pushed DOWN (spread), NOT clustered — as long as there's room.
+  //  - When pushing down would run past the article bottom (genuinely no room),
+  //    the overflowing tail merges into one badge so the column can't overflow.
+  const SAME_LINE_GAP = 12;          // px: true co-location threshold
+  const PIN_MIN_GAP = PIN_SIZE + 4;  // 32px: min spacing between spread pins
 
   function renderPins() {
     const geo = gutterGeometry();
@@ -1594,31 +1598,41 @@
     const rows = state.activeComments.map(c => commentY(c, geo)).filter(Boolean);
     rows.sort((a, b) => a.y - b.y);
 
-    // Greedy cluster by Y proximity (running cluster extent, not just last y).
+    // 1) Merge ONLY genuinely same-line comments into clusters (tight gap).
     const clusters = [];
     for (const row of rows) {
       const last = clusters[clusters.length - 1];
-      if (last && row.y - last.maxY <= CLUSTER_GAP) {
+      if (last && row.y - last.maxY <= SAME_LINE_GAP) {
         last.items.push(row);
         last.maxY = row.y;
-        last.y = (last.items[0].y + row.y) / 2; // center of the span
+        last.y = (last.items[0].y + row.y) / 2;
       } else {
         clusters.push({ y: row.y, maxY: row.y, items: [row] });
       }
     }
 
-    // Second pass: even separate clusters can sit closer than PIN_MIN_GAP after
-    // anchoring (e.g. adjacent paragraphs). Push each pin down so no two pins
-    // overlap. This keeps every pin individually clickable.
+    // 2) Spread to prevent overlap. Push each pin to >= prev + PIN_MIN_GAP. If a
+    //    pin would land below the article bottom (no vertical room left), fold it
+    //    and everything after into the previous cluster as an overflow badge.
+    const bottomLimit = geo.articleTop + geo.articleHeight; // page space we may use
+    const placed = [];
     let prevY = -Infinity;
     for (const cl of clusters) {
-      if (cl.y < prevY + PIN_MIN_GAP) cl.y = prevY + PIN_MIN_GAP;
-      prevY = cl.y;
+      let y = Math.max(cl.y, prevY + PIN_MIN_GAP);
+      if (y > bottomLimit && placed.length) {
+        // No room: merge this cluster's items into the last placed pin (overflow).
+        const tail = placed[placed.length - 1];
+        tail.items.push(...cl.items);
+        continue;
+      }
+      cl.y = y;
+      placed.push(cl);
+      prevY = y;
     }
 
-    // Reconcile pin elements: keep a stable pin per cluster keyed by member ids.
+    // 3) Reconcile pin elements: stable pin per cluster keyed by member ids.
     const seen = new Set();
-    for (const cl of clusters) {
+    for (const cl of placed) {
       const key = cl.items.map(r => r.c.id).sort().join('|');
       seen.add(key);
       let pin = pinLayer.querySelector(`.tdoc-pin[data-key="${CSS.escape(key)}"]`);
