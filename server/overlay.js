@@ -315,6 +315,46 @@
   .tdoc-margin-comment .tdoc-reply-toggle { cursor: pointer; color: #1652f0; }
   .tdoc-margin-comment .tdoc-reply-toggle:hover { text-decoration: underline; }
 
+  /* ===== Pins model (wide mode only) =====
+     In wide mode the right gutter shows one PIN per comment (or a count badge
+     for a cluster of same-Y pins) instead of a stack of full cards. The full
+     card floats open on hover and stays open ("pinned") on click. This makes
+     the margin overflow-proof: it only ever holds markers, never a tall column
+     of cards. Narrow mode is untouched (cards flow in the bottom drawer). */
+  #tdoc-pin-layer { position: absolute; top: 0; left: 0; width: 100%; height: 0; pointer-events: none; z-index: 999996; }
+  body.tdoc-narrow #tdoc-pin-layer { display: none; }
+  /* When the pins model is active, hide every card by default; only the
+     hovered/pinned card is shown (it gets .tdoc-floating-open). */
+  body.tdoc-pins:not(.tdoc-narrow) .tdoc-margin-comment { display: none; }
+  body.tdoc-pins:not(.tdoc-narrow) .tdoc-margin-comment.tdoc-floating-open { display: block; }
+
+  .tdoc-pin { position: absolute; pointer-events: auto; cursor: pointer; width: 28px; height: 28px; border-radius: 50%; background: #fff; border: 2px solid #cdd3dc; box-shadow: 0 1px 3px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; transition: transform .12s, border-color .12s, box-shadow .12s; box-sizing: border-box; }
+  .tdoc-pin:hover, .tdoc-pin.tdoc-pin-active { transform: scale(1.12); border-color: #1652f0; box-shadow: 0 2px 8px rgba(22,82,240,0.25); z-index: 1; }
+  .tdoc-pin img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+  .tdoc-pin .tdoc-pin-anon { width: 100%; height: 100%; border-radius: 50%; background: #8a93a2; }
+  /* Resolved pins get a green ring + a small ✓ overlay badge. */
+  .tdoc-pin.tdoc-pin-resolved { border-color: #1a7340; }
+  .tdoc-pin.tdoc-pin-resolved::after { content: "✓"; position: absolute; right: -3px; bottom: -3px; width: 14px; height: 14px; border-radius: 50%; background: #1a7340; color: #fff; font-size: 9px; line-height: 14px; text-align: center; font-weight: 700; }
+  /* Cluster badge — N comments at the same Y collapsed into one marker. */
+  .tdoc-pin.tdoc-pin-cluster { background: #1652f0; border-color: #1652f0; color: #fff; font: 600 12px system-ui; }
+  .tdoc-pin.tdoc-pin-cluster.tdoc-cluster-allresolved { background: #1a7340; border-color: #1a7340; }
+  .tdoc-pin.tdoc-pin-cluster::after { content: none; }
+
+  /* Floating card: when open via a pin, it sits to the left of the gutter and
+     is allowed to scroll internally so even a long thread can't overflow. */
+  body.tdoc-pins:not(.tdoc-narrow) .tdoc-margin-comment.tdoc-floating-open { max-height: 70vh; overflow-y: auto; box-shadow: 0 6px 24px rgba(0,0,0,0.16); }
+
+  /* Cluster popover: a compact list of the comments under a badge. Click one
+     to open its full card. */
+  .tdoc-cluster-pop { position: absolute; pointer-events: auto; width: 260px; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.16); padding: 6px; z-index: 999997; font: 13px system-ui; display: none; }
+  .tdoc-cluster-pop.open { display: block; }
+  .tdoc-cluster-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+  .tdoc-cluster-row:hover { background: #f5f6f8; }
+  .tdoc-cluster-row img { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; }
+  .tdoc-cluster-row .tdoc-cluster-anon { width: 20px; height: 20px; border-radius: 50%; background: #8a93a2; flex-shrink: 0; }
+  .tdoc-cluster-row .tdoc-cluster-snip { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #333; }
+  .tdoc-cluster-row .tdoc-cluster-done { color: #1a7340; font-size: 11px; flex-shrink: 0; }
+
   /* Reactions + emoji picker */
   .tdoc-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; align-items: center; }
   .tdoc-react-chip { position: relative; display: inline-flex; align-items: center; gap: 4px; font: 12px system-ui; background: #f5f6f8; border: 1px solid #e5e5e5; border-radius: 999px; padding: 2px 8px; cursor: pointer; color: #333; transition: background .12s, border-color .12s; }
@@ -530,6 +570,8 @@
     activeId: null,
     narrow: false,
     reanchoringId: null,           // comment id awaiting a new selection for re-anchoring
+    pinnedId: null,                // comment whose floating card is click-pinned open (wide mode)
+    hoverId: null,                 // comment whose card is open via hover (wide mode)
   };
 
   // Highlight API: one shared registry for pending, one per saved comment.
@@ -831,6 +873,16 @@
   drawerHandle.setAttribute('aria-label', 'Drag down to close comments');
   commentLayer.appendChild(drawerHandle);
   document.body.appendChild(commentLayer);
+
+  // Pin layer (wide mode): holds the avatar pins / cluster badges. Cards still
+  // live in commentLayer but are hidden until a pin opens one.
+  const pinLayer = document.createElement('div');
+  pinLayer.id = 'tdoc-pin-layer';
+  document.body.appendChild(pinLayer);
+  // One reusable cluster popover.
+  const clusterPop = document.createElement('div');
+  clusterPop.className = 'tdoc-cluster-pop';
+  document.body.appendChild(clusterPop);
 
   const fab = document.createElement('button');
   fab.className = 'tdoc-fab';
@@ -1470,15 +1522,10 @@
     return { el: document.body, width: Infinity, right: 0, left: 0 };
   }
 
-  function repositionCards() {
-    // Always reposition element outlines first — they should track their
-    // anchor element on every layout change regardless of narrow/wide mode.
-    document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(o => o._reposition?.());
-    if (state.narrow) {
-      for (const card of state.cardEls.values()) { card.style.top = ''; card.style.left = ''; }
-      return;
-    }
-    const margin = 12, cardGap = 16, cardWidth = 280;
+  // The X position of the gutter (where pins sit) and where a floating card
+  // opens (just left of the gutter). Computed from the article metrics.
+  function gutterGeometry() {
+    const cardWidth = 280, cardGap = 16;
     const metrics = getArticleMetrics();
     const rightEdge = metrics.width > 0 && metrics.right > 0
       ? metrics.right + window.scrollX
@@ -1486,74 +1533,207 @@
     let cardLeft = rightEdge + cardGap;
     const maxLeft = window.scrollX + window.innerWidth - cardWidth - 12;
     if (cardLeft > maxLeft) cardLeft = maxLeft;
-
-    // Unified layout: every card (anchored + unanchored with fallback) is
-    // placed in a single Y-sorted pass. This eliminates the inter-group
-    // overlap class — previously anchored cards and unanchored-with-fallback
-    // cards used independent prevBottoms and could land on top of each
-    // other when their Ys interleaved.
-    //
-    // Cards without a fallback ratio (legacy comments) park below the
-    // article in stable id order — their Y depends only on themselves and
-    // the article height, so adding/removing other cards doesn't ripple.
     const articleEl = metrics.el || document.body;
     const articleTop = articleEl.getBoundingClientRect().top + window.scrollY;
     const articleHeight = Math.max(1, articleEl.scrollHeight);
+    return { cardWidth, cardLeft, articleTop, articleHeight, articleEl };
+  }
 
-    const rows = [];
-    for (const c of state.activeComments) {
-      const card = state.cardEls.get(c.id);
-      if (!card) continue;
-      const mark = state.anchorMarks.get(c.id);
-      if (mark && (mark.ranges?.[0] || mark.el)) {
-        // Anchored: place at its anchor's vertical position.
-        const r = (mark.ranges?.[0] || mark.el).getBoundingClientRect();
-        rows.push({ card, c, y: r.top + window.scrollY, anchored: true });
-      } else if (c.anchor?.fallback && typeof c.anchor.fallback.ratio === 'number') {
-        // Unanchored with saved fallback: place at the original ratio.
-        rows.push({ card, c, y: articleTop + c.anchor.fallback.ratio * articleHeight, anchored: false });
-      }
+  // Resolve each comment's vertical page position from its anchor (live range/
+  // element) or saved fallback ratio. Returns {c, y, anchored} or null.
+  function commentY(c, geo) {
+    const mark = state.anchorMarks.get(c.id);
+    if (mark && (mark.ranges?.[0] || mark.el)) {
+      const r = (mark.ranges?.[0] || mark.el).getBoundingClientRect();
+      return { c, y: r.top + window.scrollY, anchored: true };
     }
+    if (c.anchor?.fallback && typeof c.anchor.fallback.ratio === 'number') {
+      return { c, y: geo.articleTop + c.anchor.fallback.ratio * geo.articleHeight, anchored: false };
+    }
+    return null;
+  }
+
+  function repositionCards() {
+    // Always reposition element outlines first — they should track their
+    // anchor element on every layout change regardless of narrow/wide mode.
+    document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(o => o._reposition?.());
+    if (state.narrow) {
+      // Narrow mode is unchanged: cards flow in the bottom drawer, no pins.
+      for (const card of state.cardEls.values()) { card.style.top = ''; card.style.left = ''; }
+      return;
+    }
+    // Wide mode: render PINS, not a card stack. Each comment becomes a pin at
+    // its Y; pins within CLUSTER_GAP px merge into one count badge. The floating
+    // card (hover/click) is positioned separately by openFloatingCard().
+    renderPins();
+    // Keep any currently-open floating card glued to its pin on scroll/resize.
+    if (state.pinnedId) positionFloatingCard(state.pinnedId);
+    else if (state.hoverId) positionFloatingCard(state.hoverId);
+  }
+
+  const CLUSTER_GAP = 22; // px: pins closer than this on Y merge into a badge
+
+  function renderPins() {
+    const geo = gutterGeometry();
+    // Y-sorted list of placeable comments.
+    const rows = state.activeComments.map(c => commentY(c, geo)).filter(Boolean);
     rows.sort((a, b) => a.y - b.y);
 
-    let prevBottom = 0;
+    // Greedy cluster by Y proximity.
+    const clusters = [];
     for (const row of rows) {
-      let y = row.y;
-      if (y < prevBottom + margin) y = prevBottom + margin;
-      row.card.style.top = y + 'px';
-      row.card.style.left = cardLeft + 'px';
-      if (row.anchored) row.card.classList.remove('tdoc-unanchored');
-      else {
-        row.card.classList.add('tdoc-unanchored');
-        // Ghost marker shows where the deleted text USED to be — only
-        // meaningful when the anchor was lost involuntarily (the doc was
-        // rewritten). We suppress it in two cases:
-        //   - the user explicitly removed the anchor (kind:'none'), or
-        //   - the comment is RESOLVED (status:'applied') — an addressed
-        //     comment shouldn't leave a dash sitting at its old spot.
-        if (row.c.anchor?.kind !== 'none' && row.c.status !== 'applied') {
-          renderGhostMarker(row.c.id, articleTop + row.c.anchor.fallback.ratio * articleHeight);
-        } else {
-          removeGhostMarker(row.c.id);
-        }
-      }
-      prevBottom = y + row.card.offsetHeight;
+      const last = clusters[clusters.length - 1];
+      if (last && row.y - last.y <= CLUSTER_GAP) { last.items.push(row); last.y = (last.y + row.y) / 2; }
+      else clusters.push({ y: row.y, items: [row] });
     }
 
-    // Legacy cards without fallback go below the article, stable id-sorted.
-    const articleBottom = articleTop + articleHeight;
-    const withoutFb = state.activeComments
-      .map(c => ({ c, card: state.cardEls.get(c.id) }))
-      .filter(x => x.card && !state.anchorMarks.get(x.c.id) && !(x.c.anchor?.fallback && typeof x.c.anchor.fallback.ratio === 'number'))
-      .sort((a, b) => (a.c.id || '').localeCompare(b.c.id || ''));
-    let tailY = Math.max(articleBottom + 32, prevBottom + margin);
-    for (const { card } of withoutFb) {
-      card.style.top = tailY + 'px';
-      card.style.left = cardLeft + 'px';
-      card.classList.add('tdoc-unanchored');
-      tailY += card.offsetHeight + margin;
+    // Reconcile pin elements: keep a stable pin per cluster keyed by member ids.
+    const seen = new Set();
+    for (const cl of clusters) {
+      const key = cl.items.map(r => r.c.id).sort().join('|');
+      seen.add(key);
+      let pin = pinLayer.querySelector(`.tdoc-pin[data-key="${CSS.escape(key)}"]`);
+      if (!pin) {
+        pin = buildPin(cl);
+        pin.dataset.key = key;
+        pinLayer.appendChild(pin);
+      }
+      const pinSize = 28;
+      pin.style.top = (cl.y - pinSize / 2) + 'px';
+      pin.style.left = geo.cardLeft + 'px';
     }
+    // Remove stale pins (cluster membership changed).
+    pinLayer.querySelectorAll('.tdoc-pin').forEach(p => { if (!seen.has(p.dataset.key)) p.remove(); });
+
+    // No ghost dashes in pins mode — the pin itself is the marker.
+    document.querySelectorAll('.tdoc-ghost-marker').forEach(el => el.remove());
   }
+
+  function avatarHTML(author, anonClass) {
+    const url = author?.avatar_url;
+    return url ? `<img src="${escapeHtml(url)}" alt="">` : `<span class="${anonClass}"></span>`;
+  }
+
+  function buildPin(cluster) {
+    const pin = document.createElement('div');
+    pin.className = 'tdoc-pin';
+    pin.setAttribute('role', 'button');
+    pin.setAttribute('tabindex', '0');
+    if (cluster.items.length === 1) {
+      const c = cluster.items[0].c;
+      const resolved = c.status === 'applied';
+      pin.classList.toggle('tdoc-pin-resolved', resolved);
+      pin.innerHTML = avatarHTML(c.author, 'tdoc-pin-anon');
+      pin.title = `${c.author?.login || 'anonymous'}: ${c.text || ''}`.slice(0, 80);
+      pin.addEventListener('mouseenter', () => hoverOpen(c.id));
+      pin.addEventListener('mouseleave', () => hoverClose(c.id));
+      pin.addEventListener('click', (e) => { e.stopPropagation(); togglePin(c.id); });
+      pin.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePin(c.id); } });
+    } else {
+      const allResolved = cluster.items.every(r => r.c.status === 'applied');
+      pin.classList.add('tdoc-pin-cluster');
+      pin.classList.toggle('tdoc-cluster-allresolved', allResolved);
+      pin.textContent = String(cluster.items.length);
+      pin.title = `${cluster.items.length} comments`;
+      pin.addEventListener('click', (e) => { e.stopPropagation(); openClusterPopover(cluster, pin); });
+      pin.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openClusterPopover(cluster, pin); } });
+    }
+    return pin;
+  }
+
+  // ---- Floating card open/close ----
+  function showCard(id) {
+    const card = state.cardEls.get(id);
+    if (!card) return;
+    // Only one floating card at a time.
+    document.querySelectorAll('.tdoc-margin-comment.tdoc-floating-open').forEach(el => {
+      if (el !== card) el.classList.remove('tdoc-floating-open');
+    });
+    card.classList.add('tdoc-floating-open');
+    positionFloatingCard(id);
+  }
+  function hideCardIfIdle(id) {
+    if (state.pinnedId === id || state.hoverId === id) return;
+    const card = state.cardEls.get(id);
+    if (card) card.classList.remove('tdoc-floating-open');
+  }
+  function positionFloatingCard(id) {
+    const card = state.cardEls.get(id);
+    if (!card) return;
+    const row = commentY(state.activeComments.find(c => c.id === id), gutterGeometry());
+    const geo = gutterGeometry();
+    let y = row ? row.y : geo.articleTop;
+    card.style.left = geo.cardLeft + 'px';
+    // Flip up if the card would run past the bottom of the viewport.
+    card.style.top = y + 'px';
+    requestAnimationFrame(() => {
+      const h = card.offsetHeight;
+      const vpBottom = window.scrollY + window.innerHeight - 12;
+      if (y + h > vpBottom) card.style.top = Math.max(window.scrollY + 56, vpBottom - h) + 'px';
+    });
+  }
+  function hoverOpen(id) {
+    state.hoverId = id;
+    showCard(id);
+    markPinActive(id, true);
+  }
+  function hoverClose(id) {
+    if (state.hoverId === id) state.hoverId = null;
+    // Small delay so moving the cursor from pin into the card doesn't close it.
+    setTimeout(() => { if (state.hoverId !== id) { hideCardIfIdle(id); markPinActive(id, state.pinnedId === id); } }, 120);
+  }
+  function togglePin(id) {
+    if (state.pinnedId === id) { state.pinnedId = null; hideCardIfIdle(id); markPinActive(id, false); setActiveComment(null); return; }
+    state.pinnedId = id;
+    showCard(id);
+    markPinActive(id, true);
+    setActiveComment(id);
+  }
+  function markPinActive(id, on) {
+    const c = state.activeComments.find(x => x.id === id);
+    if (!c) return;
+    pinLayer.querySelectorAll('.tdoc-pin').forEach(p => {
+      if ((p.dataset.key || '').split('|').includes(id)) p.classList.toggle('tdoc-pin-active', !!on);
+    });
+  }
+
+  // ---- Cluster popover ----
+  function openClusterPopover(cluster, pin) {
+    if (clusterPop.classList.contains('open') && clusterPop._key === pin.dataset.key) { closeClusterPopover(); return; }
+    clusterPop._key = pin.dataset.key;
+    clusterPop.innerHTML = cluster.items.map(r => {
+      const c = r.c;
+      const done = c.status === 'applied' ? '<span class="tdoc-cluster-done">✓</span>' : '';
+      return `<div class="tdoc-cluster-row" data-id="${escapeHtml(c.id)}">
+        ${avatarHTML(c.author, 'tdoc-cluster-anon')}
+        <span class="tdoc-cluster-snip">${escapeHtml((c.text || '').slice(0, 60))}</span>${done}
+      </div>`;
+    }).join('');
+    clusterPop.querySelectorAll('.tdoc-cluster-row').forEach(rowEl => {
+      rowEl.onclick = (e) => { e.stopPropagation(); closeClusterPopover(); togglePin(rowEl.dataset.id); };
+    });
+    const pinRect = pin.getBoundingClientRect();
+    clusterPop.style.top = (pinRect.top + window.scrollY) + 'px';
+    clusterPop.style.left = (pinRect.left + window.scrollX - 268) + 'px';
+    clusterPop.classList.add('open');
+  }
+  function closeClusterPopover() { clusterPop.classList.remove('open'); clusterPop._key = null; }
+  document.addEventListener('click', (e) => {
+    if (!clusterPop.contains(e.target) && !e.target.closest?.('.tdoc-pin-cluster')) closeClusterPopover();
+    // Click outside an open pinned card (and not on a pin) unpins it.
+    if (state.pinnedId && !e.target.closest?.('.tdoc-margin-comment') && !e.target.closest?.('.tdoc-pin')) {
+      const id = state.pinnedId; state.pinnedId = null; hideCardIfIdle(id); markPinActive(id, false);
+    }
+  });
+  // Keep a hover-opened card alive while the cursor is over the card itself.
+  commentLayer.addEventListener('mouseenter', (e) => {
+    const card = e.target.closest?.('.tdoc-margin-comment.tdoc-floating-open');
+    if (card) { const id = [...state.cardEls.entries()].find(([, el]) => el === card)?.[0]; if (id) state.hoverId = id; }
+  }, true);
+  commentLayer.addEventListener('mouseleave', (e) => {
+    const card = e.target.closest?.('.tdoc-margin-comment.tdoc-floating-open');
+    if (card) { const id = [...state.cardEls.entries()].find(([, el]) => el === card)?.[0]; if (id) hoverClose(id); }
+  }, true);
 
   function renderGhostMarker(commentId, pageY) {
     let g = document.querySelector(`.tdoc-ghost-marker[data-comment-id="${CSS.escape(commentId)}"]`);
@@ -1637,6 +1817,11 @@
     document.querySelectorAll('.tdoc-element-outline:not(.pending)').forEach(el => el.remove());
     document.querySelectorAll('.tdoc-ghost-marker').forEach(el => el.remove());
     for (const card of commentLayer.querySelectorAll('.tdoc-margin-comment')) card.remove();
+    // Pins model teardown: drop pins + any open floating card / popover so the
+    // next render starts from a clean slate (cluster keys may have changed).
+    if (typeof pinLayer !== 'undefined') pinLayer.querySelectorAll('.tdoc-pin').forEach(p => p.remove());
+    if (typeof clusterPop !== 'undefined') { clusterPop.classList.remove('open'); clusterPop._key = null; }
+    state.pinnedId = null; state.hoverId = null;
     state.anchorMarks.clear();
     state.cardEls.clear();
   }
@@ -1748,8 +1933,17 @@
     const narrow = isPhone || articleWidth < MIN_ARTICLE_WIDTH || columnRoom < MIN_COLUMN_WIDTH;
     state.narrow = narrow;
     document.body.classList.toggle('tdoc-narrow', narrow);
+    // Pins model is active in wide mode whenever there are comments. Toggling
+    // this class hides the card stack (CSS) and lets renderPins() take over.
+    document.body.classList.toggle('tdoc-pins', !narrow && state.activeComments.length > 0);
     fab.style.display = (narrow && state.activeComments.length > 0) ? 'inline-flex' : 'none';
     if (!narrow) commentLayer.classList.remove('open');
+    if (narrow) {
+      // Leaving wide mode: tear down any open floating card + pins state.
+      state.pinnedId = null; state.hoverId = null;
+      document.querySelectorAll('.tdoc-margin-comment.tdoc-floating-open').forEach(el => el.classList.remove('tdoc-floating-open'));
+      closeClusterPopover();
+    }
   }
 
   window.addEventListener('resize', () => requestAnimationFrame(() => { evaluateLayout(); repositionCards(); }));
