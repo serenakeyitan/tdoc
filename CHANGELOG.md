@@ -4,6 +4,43 @@ All notable changes to tdoc are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow the `VERSION`
 file and `.claude-plugin/plugin.json`.
 
+## [0.8.0] - 2026-06-30
+
+Comment margin redesign: **pins instead of a card stack**, so the right gutter
+can no longer overflow ("拍不下") no matter how many comments a doc has. Built
+behind a full scenario audit (88 scenarios, every gap adversarially verified)
+and confirmed in a real browser.
+
+### Added — pins in the margin (wide mode)
+
+- The right gutter now shows **one avatar pin per comment** (green ✓ ring when
+  resolved) instead of a column of full cards. The full card **floats open on
+  hover** and stays open (**pinned**) on click; click-outside, a second click,
+  or **Esc** closes it. Floating cards cap at 70vh with internal scroll so even
+  a long thread can't overflow.
+- **Same-line comments merge into a count badge** that opens a list popover;
+  pick a row (mouse or keyboard) to open that comment. Clustering only fires for
+  genuinely co-located comments — otherwise pins **spread apart** and show
+  individually as long as there's vertical room; a dense page folds the
+  overflowing tail into one badge so the column still can't overflow.
+- Narrow/mobile is unchanged: comments still flow in the bottom drawer.
+
+### Fixed
+
+- **Resolved comments no longer leave an in-text anchor.** An addressed comment
+  kept its gold highlight + dashed marker sitting at the old spot; resolved
+  comments now drop the in-text anchor while keeping their margin card and
+  "✓ fixed · vN" chip. Replies are collapsed by default.
+- **A reply/react/re-anchor no longer makes the open card vanish.** Those
+  actions refresh the comment list, which used to tear down the pinned card
+  mid-action; the refresh now preserves and restores the open card.
+- **Pin avatars are no longer treated as commentable artifacts** — hovering a
+  pin used to pop the "comment on this image" pill over tdoc's own UI. The pin
+  layer + cluster popover are now excluded from artifact detection.
+- Cluster popover is clamped to the viewport (flips/lifts at the edges) and is
+  keyboard-navigable; broken avatar images fall back to a placeholder; a
+  flipped-up card clears the old-version strip.
+
 ## [0.7.11] - 2026-06-29
 
 Dual-engine code audit (Codex + Claude subagents, every finding adversarially
