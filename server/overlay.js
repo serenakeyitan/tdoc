@@ -1555,8 +1555,13 @@
   function commentY(c, geo) {
     const mark = state.anchorMarks.get(c.id);
     if (mark && (mark.ranges?.[0] || mark.el)) {
-      const r = (mark.ranges?.[0] || mark.el).getBoundingClientRect();
-      return { c, y: r.top + window.scrollY, anchored: true };
+      const target = mark.ranges?.[0] || mark.el;
+      const r = target.getBoundingClientRect();
+      // For element anchors expose the element + its rect so renderPins can
+      // spread multiple comments DOWN a tall element instead of stacking them
+      // all at its top edge. (targetEl is the live element; el may be the outline.)
+      const el = mark.kind === 'element' ? (mark.targetEl || mark.el) : null;
+      return { c, y: r.top + window.scrollY, anchored: true, el, elTop: r.top + window.scrollY, elHeight: r.height };
     }
     if (c.anchor?.fallback && typeof c.anchor.fallback.ratio === 'number') {
       return { c, y: geo.articleTop + c.anchor.fallback.ratio * geo.articleHeight, anchored: false };
@@ -1596,6 +1601,30 @@
     const geo = gutterGeometry();
     // Y-sorted list of placeable comments.
     const rows = state.activeComments.map(c => commentY(c, geo)).filter(Boolean);
+
+    // 0) Spread comments that share the SAME element anchor down that element's
+    //    height. Element anchors all resolve to the element's TOP edge, so N
+    //    comments on one tall canvas/SVG/image would otherwise stack at one Y
+    //    and merge into a single "N" badge — even with plenty of room. Distribute
+    //    them evenly along the element (capped to PIN_MIN_GAP spacing) so they
+    //    show as individual pins; comments on a SHORT element still cluster.
+    const byEl = new Map();
+    for (const r of rows) {
+      if (!r.el) continue;
+      if (!byEl.has(r.el)) byEl.set(r.el, []);
+      byEl.get(r.el).push(r);
+    }
+    for (const [el, group] of byEl) {
+      if (group.length < 2) continue;
+      const top = group[0].elTop, h = group[0].elHeight || 0;
+      const usable = Math.max(0, h - PIN_SIZE);
+      if (usable < PIN_MIN_GAP) continue; // element too short to spread → let them cluster
+      // Even spacing down the element, but never tighter than PIN_MIN_GAP (a
+      // short-ish element with many comments still spreads as far as it can,
+      // then the overflow logic later folds any tail into a badge).
+      const step = Math.max(PIN_MIN_GAP, usable / (group.length - 1));
+      group.forEach((r, i) => { r.y = top + i * step; });
+    }
     rows.sort((a, b) => a.y - b.y);
 
     // 1) Merge ONLY genuinely same-line comments into clusters (tight gap).
