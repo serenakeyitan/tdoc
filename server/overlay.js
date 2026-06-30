@@ -368,25 +368,26 @@
      and spot which comments the agent has already responded to. */
   .tdoc-react-chip.agent { background: #f3eaff; border-color: #c3a8f0; color: #5a2da8; }
   .tdoc-react-chip.agent.mine { background: #f3eaff; border-color: #c3a8f0; color: #5a2da8; }
-  /* Custom reactors tooltip — shows the GitHub logins (or agent labels) of
-     everyone who used this emoji. Native title= has ~1s delay; this is
-     instant and styled to match the doc. */
-  .tdoc-react-chip[data-users]:hover::after {
-    content: attr(data-users);
+  /* Reactors tooltip — shows the GitHub logins (or agent labels) of everyone
+     who used this emoji. Rendered as a BODY-LEVEL element (not a ::after on the
+     chip) so it escapes the floating card's overflow:auto clip and can be
+     clamped to the viewport — a ::after centered on a chip near the card's left
+     edge was truncated. Positioned by JS on hover. */
+  #tdoc-reactors-tip {
     position: absolute;
-    bottom: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%);
+    display: none;
     background: #111;
     color: #fff;
     padding: 4px 8px;
     border-radius: 6px;
-    font: 11px/1.3 system-ui;
+    font: 11px/1.4 system-ui;
     white-space: pre;
-    max-width: 240px;
+    max-width: 260px;
     pointer-events: none;
-    z-index: 999999;
+    z-index: 1000000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
   }
+  #tdoc-reactors-tip.open { display: block; }
   .tdoc-react-add { background: transparent; border: none; color: #aaa; padding: 0; cursor: pointer; line-height: 1; transition: color .12s, opacity .12s; display: inline-flex; align-items: center; }
   .tdoc-react-add svg { width: 16px; height: 16px; display: block; }
   .tdoc-reactions .tdoc-react-add { opacity: 0; padding: 2px 4px; }
@@ -887,6 +888,36 @@
   const clusterPop = document.createElement('div');
   clusterPop.className = 'tdoc-cluster-pop';
   document.body.appendChild(clusterPop);
+
+  // One reusable body-level reactors tooltip (escapes card overflow clipping).
+  const reactorsTip = document.createElement('div');
+  reactorsTip.id = 'tdoc-reactors-tip';
+  document.body.appendChild(reactorsTip);
+  function showReactorsTip(chip) {
+    const users = chip.getAttribute('data-users');
+    if (!users) return;
+    reactorsTip.textContent = users;
+    reactorsTip.classList.add('open');           // measurable
+    const r = chip.getBoundingClientRect();
+    const tw = reactorsTip.offsetWidth, th = reactorsTip.offsetHeight;
+    // Centered above the chip, then clamped to the viewport on both axes so the
+    // full name is always visible (never truncated off the left/right edge).
+    let left = r.left + window.scrollX + r.width / 2 - tw / 2;
+    left = Math.max(window.scrollX + 6, Math.min(left, window.scrollX + window.innerWidth - tw - 6));
+    let top = r.top + window.scrollY - th - 6;
+    if (top < window.scrollY + 6) top = r.bottom + window.scrollY + 6; // flip below if no room above
+    reactorsTip.style.left = left + 'px';
+    reactorsTip.style.top = top + 'px';
+  }
+  function hideReactorsTip() { reactorsTip.classList.remove('open'); }
+  // Delegated hover — works for chips inside floating cards / replies / drawer.
+  document.addEventListener('mouseover', (e) => {
+    const chip = e.target.closest?.('.tdoc-react-chip[data-users]');
+    if (chip) showReactorsTip(chip);
+  });
+  document.addEventListener('mouseout', (e) => {
+    if (e.target.closest?.('.tdoc-react-chip[data-users]')) hideReactorsTip();
+  });
 
   const fab = document.createElement('button');
   fab.className = 'tdoc-fab';
