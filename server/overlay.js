@@ -1819,11 +1819,26 @@
     state.activeId = id || null;
     document.querySelectorAll('.tdoc-anchor-mark.active, .tdoc-margin-comment.active, .tdoc-element-outline.active')
       .forEach(el => el.classList.remove('active'));
-    if (!id) { rebuildSharedHighlights(); return; }
+    if (!id) {
+      // Deselect: in pins mode also close any open floating card.
+      if (!state.narrow && state.pinnedId) { const prev = state.pinnedId; state.pinnedId = null; hideCardIfIdle(prev); markPinActive(prev, false); }
+      rebuildSharedHighlights();
+      return;
+    }
     const mark = state.anchorMarks.get(id);
     if (mark?.el?.classList) mark.el.classList.add('active');
     const card = state.cardEls.get(id);
     card?.classList.add('active');
+    // Pins mode: cards are hidden by default, so selecting a comment (e.g. by
+    // CLICKING ITS HIGHLIGHTED ANCHOR TEXT) must also open + pin its floating
+    // card — otherwise the click just highlights with no visible card. This
+    // makes anchor-click symmetric with pin-click.
+    if (!state.narrow && state.pinnedId !== id) {
+      if (state.pinnedId) markPinActive(state.pinnedId, false);
+      state.pinnedId = id;
+      showCard(id);
+      markPinActive(id, true);
+    }
     rebuildSharedHighlights();
     // Do NOT reposition cards on click — only the .active highlight should
     // change. Reordering cards every click is disorienting; users expect
