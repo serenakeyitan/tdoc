@@ -82,7 +82,7 @@
      itself inside the remaining (viewport - 320px) space via margin auto
      (applied below in :where()). Adding a left padding keeps it from
      hugging the screen edge on wide windows. */
-  body.tdoc-has-comments:not(.tdoc-narrow) { padding-right: 320px !important; padding-left: 80px !important; }
+  body.tdoc-has-comments:not(.tdoc-narrow) { padding-right: 360px !important; padding-left: 80px !important; }
   body.tdoc-narrow { padding-right: 0 !important; }
   /* Center the article container in the reading column. :where() so any
      doc-defined margin wins. Applies only on wide layouts; narrow mode
@@ -346,7 +346,8 @@
 
   /* Cluster popover: a compact list of the comments under a badge. Click one
      to open its full card. */
-  .tdoc-cluster-pop { position: absolute; pointer-events: auto; width: 260px; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.16); padding: 6px; z-index: 999997; font: 13px system-ui; display: none; }
+  .tdoc-cluster-pop { position: absolute; pointer-events: auto; width: 260px; max-height: 60vh; overflow-y: auto; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.16); padding: 6px; z-index: 999997; font: 13px system-ui; display: none; }
+  .tdoc-cluster-row.tdoc-cluster-current { background: #eef2ff; }
   .tdoc-cluster-pop.open { display: block; }
   .tdoc-cluster-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
   .tdoc-cluster-row:hover { background: #f5f6f8; }
@@ -1524,19 +1525,26 @@
 
   // The X position of the gutter (where pins sit) and where a floating card
   // opens (just left of the gutter). Computed from the article metrics.
+  const PIN_SIZE = 28;
   function gutterGeometry() {
-    const cardWidth = 280, cardGap = 16;
+    const cardWidth = 280, pinGap = 12;
     const metrics = getArticleMetrics();
     const rightEdge = metrics.width > 0 && metrics.right > 0
       ? metrics.right + window.scrollX
-      : window.innerWidth - 320;
-    let cardLeft = rightEdge + cardGap;
+      : window.innerWidth - 360;
+    // Pins live in a thin column hugging the article edge. The floating card
+    // opens to the RIGHT of the pins so the two never collide.
+    let pinLeft = rightEdge + pinGap;
+    let cardLeft = pinLeft + PIN_SIZE + pinGap;   // card clears the pin column
     const maxLeft = window.scrollX + window.innerWidth - cardWidth - 12;
-    if (cardLeft > maxLeft) cardLeft = maxLeft;
+    if (cardLeft > maxLeft) {
+      cardLeft = maxLeft;
+      pinLeft = Math.max(rightEdge + pinGap, cardLeft - PIN_SIZE - pinGap);
+    }
     const articleEl = metrics.el || document.body;
     const articleTop = articleEl.getBoundingClientRect().top + window.scrollY;
     const articleHeight = Math.max(1, articleEl.scrollHeight);
-    return { cardWidth, cardLeft, articleTop, articleHeight, articleEl };
+    return { cardWidth, cardLeft, pinLeft, articleTop, articleHeight, articleEl };
   }
 
   // Resolve each comment's vertical page position from its anchor (live range/
@@ -1571,7 +1579,11 @@
     else if (state.hoverId) positionFloatingCard(state.hoverId);
   }
 
-  const CLUSTER_GAP = 22; // px: pins closer than this on Y merge into a badge
+  // Pins whose centers are closer than this on Y merge into one count badge.
+  // Must exceed PIN_SIZE so two separate pins can't visually overlap — anything
+  // tighter becomes a cluster instead.
+  const CLUSTER_GAP = PIN_SIZE + 6; // 34px
+  const PIN_MIN_GAP = PIN_SIZE + 4; // min center-to-center between rendered pins
 
   function renderPins() {
     const geo = gutterGeometry();
@@ -1579,12 +1591,26 @@
     const rows = state.activeComments.map(c => commentY(c, geo)).filter(Boolean);
     rows.sort((a, b) => a.y - b.y);
 
-    // Greedy cluster by Y proximity.
+    // Greedy cluster by Y proximity (running cluster extent, not just last y).
     const clusters = [];
     for (const row of rows) {
       const last = clusters[clusters.length - 1];
-      if (last && row.y - last.y <= CLUSTER_GAP) { last.items.push(row); last.y = (last.y + row.y) / 2; }
-      else clusters.push({ y: row.y, items: [row] });
+      if (last && row.y - last.maxY <= CLUSTER_GAP) {
+        last.items.push(row);
+        last.maxY = row.y;
+        last.y = (last.items[0].y + row.y) / 2; // center of the span
+      } else {
+        clusters.push({ y: row.y, maxY: row.y, items: [row] });
+      }
+    }
+
+    // Second pass: even separate clusters can sit closer than PIN_MIN_GAP after
+    // anchoring (e.g. adjacent paragraphs). Push each pin down so no two pins
+    // overlap. This keeps every pin individually clickable.
+    let prevY = -Infinity;
+    for (const cl of clusters) {
+      if (cl.y < prevY + PIN_MIN_GAP) cl.y = prevY + PIN_MIN_GAP;
+      prevY = cl.y;
     }
 
     // Reconcile pin elements: keep a stable pin per cluster keyed by member ids.
@@ -1598,9 +1624,8 @@
         pin.dataset.key = key;
         pinLayer.appendChild(pin);
       }
-      const pinSize = 28;
-      pin.style.top = (cl.y - pinSize / 2) + 'px';
-      pin.style.left = geo.cardLeft + 'px';
+      pin.style.top = (cl.y - PIN_SIZE / 2) + 'px';
+      pin.style.left = geo.pinLeft + 'px';   // pins in their own gutter, left of cards
     }
     // Remove stale pins (cluster membership changed).
     pinLayer.querySelectorAll('.tdoc-pin').forEach(p => { if (!seen.has(p.dataset.key)) p.remove(); });
@@ -1611,7 +1636,11 @@
 
   function avatarHTML(author, anonClass) {
     const url = author?.avatar_url;
-    return url ? `<img src="${escapeHtml(url)}" alt="">` : `<span class="${anonClass}"></span>`;
+    // onerror: if the avatar 404s / is CORS-blocked, swap the broken <img> for
+    // the anon placeholder so the pin/row never shows a broken-image glyph.
+    return url
+      ? `<img src="${escapeHtml(url)}" alt="" onerror="this.outerHTML='&lt;span class=&quot;${anonClass}&quot;&gt;&lt;/span&gt;'">`
+      : `<span class="${anonClass}"></span>`;
   }
 
   function buildPin(cluster) {
@@ -1624,7 +1653,10 @@
       const resolved = c.status === 'applied';
       pin.classList.toggle('tdoc-pin-resolved', resolved);
       pin.innerHTML = avatarHTML(c.author, 'tdoc-pin-anon');
-      pin.title = `${c.author?.login || 'anonymous'}: ${c.text || ''}`.slice(0, 80);
+      // a11y label only — NOT the native `title` (which renders an ugly dark
+      // tooltip box that overlaps the floating card). The card itself is the
+      // preview on hover, so no extra tooltip is needed.
+      pin.setAttribute('aria-label', `Comment by ${c.author?.login || 'anonymous'}`);
       pin.addEventListener('mouseenter', () => hoverOpen(c.id));
       pin.addEventListener('mouseleave', () => hoverClose(c.id));
       pin.addEventListener('click', (e) => { e.stopPropagation(); togglePin(c.id); });
@@ -1634,7 +1666,7 @@
       pin.classList.add('tdoc-pin-cluster');
       pin.classList.toggle('tdoc-cluster-allresolved', allResolved);
       pin.textContent = String(cluster.items.length);
-      pin.title = `${cluster.items.length} comments`;
+      pin.setAttribute('aria-label', `${cluster.items.length} comments here`);
       pin.addEventListener('click', (e) => { e.stopPropagation(); openClusterPopover(cluster, pin); });
       pin.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openClusterPopover(cluster, pin); } });
     }
@@ -1669,7 +1701,10 @@
     requestAnimationFrame(() => {
       const h = card.offsetHeight;
       const vpBottom = window.scrollY + window.innerHeight - 12;
-      if (y + h > vpBottom) card.style.top = Math.max(window.scrollY + 56, vpBottom - h) + 'px';
+      // Top floor must clear the fixed bar (and the old-version strip when shown)
+      // so a flipped-up card isn't occluded by them.
+      const topFloor = window.scrollY + (document.body.classList.contains('tdoc-has-oldver-strip') ? 84 : 56);
+      if (y + h > vpBottom) card.style.top = Math.max(topFloor, vpBottom - h) + 'px';
     });
   }
   function hoverOpen(id) {
@@ -1704,18 +1739,31 @@
     clusterPop.innerHTML = cluster.items.map(r => {
       const c = r.c;
       const done = c.status === 'applied' ? '<span class="tdoc-cluster-done">✓</span>' : '';
-      return `<div class="tdoc-cluster-row" data-id="${escapeHtml(c.id)}">
+      const cur = c.id === state.pinnedId ? ' tdoc-cluster-current' : '';
+      return `<div class="tdoc-cluster-row${cur}" role="button" tabindex="0" data-id="${escapeHtml(c.id)}">
         ${avatarHTML(c.author, 'tdoc-cluster-anon')}
         <span class="tdoc-cluster-snip">${escapeHtml((c.text || '').slice(0, 60))}</span>${done}
       </div>`;
     }).join('');
+    const pickRow = (rowEl) => { closeClusterPopover(); togglePin(rowEl.dataset.id); };
     clusterPop.querySelectorAll('.tdoc-cluster-row').forEach(rowEl => {
-      rowEl.onclick = (e) => { e.stopPropagation(); closeClusterPopover(); togglePin(rowEl.dataset.id); };
+      rowEl.onclick = (e) => { e.stopPropagation(); pickRow(rowEl); };
+      rowEl.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); pickRow(rowEl); } };
     });
+    // Position the popover to the LEFT of the pin, then clamp to the viewport
+    // on both axes so a tall (many-row) or edge-of-screen popover never spills
+    // off-screen. Height is capped by CSS (max-height:60vh + scroll).
+    clusterPop.classList.add('open');           // make it measurable
+    const popW = clusterPop.offsetWidth || 260;
+    const popH = clusterPop.offsetHeight || 200;
     const pinRect = pin.getBoundingClientRect();
-    clusterPop.style.top = (pinRect.top + window.scrollY) + 'px';
-    clusterPop.style.left = (pinRect.left + window.scrollX - 268) + 'px';
-    clusterPop.classList.add('open');
+    let left = pinRect.left + window.scrollX - popW - 8;
+    if (left < window.scrollX + 8) left = pinRect.right + window.scrollX + 8; // flip right if no room left
+    let top = pinRect.top + window.scrollY;
+    const maxTop = window.scrollY + window.innerHeight - popH - 8;
+    if (top > maxTop) top = Math.max(window.scrollY + 56, maxTop);
+    clusterPop.style.left = left + 'px';
+    clusterPop.style.top = top + 'px';
   }
   function closeClusterPopover() { clusterPop.classList.remove('open'); clusterPop._key = null; }
   document.addEventListener('click', (e) => {
@@ -1828,6 +1876,12 @@
 
   // ========== refreshComments ==========
   async function refreshComments() {
+    // Preserve which comment had its floating card pinned open (wide mode) so a
+    // reply/react/re-anchor that triggers a refresh doesn't make the card the
+    // user is interacting with vanish. resetAnchors() nulls state.pinnedId, so
+    // capture it first and restore after the rebuild — but only if the comment
+    // still exists in the fresh list (a deleted comment correctly stays gone).
+    const keepPinnedId = state.pinnedId;
     resetAnchors();
 
     let list = [];
@@ -1901,7 +1955,17 @@
     }
     rebuildSharedHighlights();
     evaluateLayout();
-    requestAnimationFrame(repositionCards);
+    requestAnimationFrame(() => {
+      repositionCards();
+      // Restore the pinned floating card if its comment survived the refresh
+      // and we're in wide (pins) mode. Runs after repositionCards so the pin
+      // elements exist to mark active.
+      if (keepPinnedId && !state.narrow && state.cardEls.has(keepPinnedId)) {
+        state.pinnedId = keepPinnedId;
+        showCard(keepPinnedId);
+        markPinActive(keepPinnedId, true);
+      }
+    });
   }
 
   // Click on a Highlight-API range → activate. Highlight API has no per-range
@@ -1947,9 +2011,13 @@
   }
 
   window.addEventListener('resize', () => requestAnimationFrame(() => { evaluateLayout(); repositionCards(); }));
-  // Esc cancels re-anchor mode globally.
+  // Esc cancels re-anchor mode, then closes any open cluster popover / pinned
+  // floating card (most-transient-first so one Esc peels one layer).
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && state.reanchoringId) exitReanchor();
+    if (e.key !== 'Escape') return;
+    if (state.reanchoringId) { exitReanchor(); return; }
+    if (clusterPop.classList.contains('open')) { closeClusterPopover(); return; }
+    if (state.pinnedId) { const id = state.pinnedId; state.pinnedId = null; hideCardIfIdle(id); markPinActive(id, false); setActiveComment(null); }
   });
   window.addEventListener('scroll', () => requestAnimationFrame(repositionCards), { passive: true });
   if (window.ResizeObserver) new ResizeObserver(() => repositionCards()).observe(document.body);
