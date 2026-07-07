@@ -75,6 +75,9 @@ function isLocalMutation(req) {
 // can't outlive the new outcome (e.g. an "applied" ✅ after a later
 // "question" outcome on the same comment).
 const AGENT_STATUS_EMOJI = { applied: '✅', partial: '🟡', question: '❓' };
+// The emoji set the agent uses as a verdict marker — used by the per-version
+// fold to strip a stale verdict off snapshots where the comment reads 'open'.
+const AGENT_VERDICT_EMOJI = new Set(Object.values(AGENT_STATUS_EMOJI));
 function setAgentReaction(target, status) {
   if (!target.reactions) target.reactions = {};
   for (const emoji of Object.keys(target.reactions)) {
@@ -142,10 +145,25 @@ function foldCommentsAtVersion(comments, version) {
     if (createdIn > V) continue; // didn't exist yet at version V
     const appliedIn = c.applied_in != null ? Number(c.applied_in) : null;
     const resolvedByV = c.status === 'applied' && appliedIn != null && appliedIn <= V;
+    // Reactions are stored flat (no per-reaction version), so spreading `...c`
+    // would carry the CURRENT reactions — including the agent verdict emoji
+    // (✅/🟡/❓ written by setAgentReaction) — onto every past snapshot. On a
+    // version where the comment folds to 'open' that's a contradictory
+    // "resolved" emoji, so drop the tdoc-agent verdict there.
+    let reactions = c.reactions;
+    if (!resolvedByV && reactions) {
+      const filtered = {};
+      for (const [emoji, users] of Object.entries(reactions)) {
+        const rest = Array.isArray(users) ? users.filter(u => !(u === 'tdoc-agent' && AGENT_VERDICT_EMOJI.has(emoji))) : users;
+        if (rest && rest.length) filtered[emoji] = rest;
+      }
+      reactions = filtered;
+    }
     const snap = {
       ...c,
       status: resolvedByV ? 'applied' : 'open',
       applied_in: resolvedByV ? appliedIn : undefined,
+      reactions,
       replies: Array.isArray(c.replies)
         ? c.replies.filter(r => (Number(r.version != null ? r.version : createdIn) || createdIn) <= V)
         : [],
@@ -240,7 +258,11 @@ const server = http.createServer(async (req, res) => {
       const parent = comments.find(c => c.id === parent_id);
       if (!parent) return json(res, 404, { error: 'parent_not_found' });
       if (!Array.isArray(parent.replies)) parent.replies = [];
-      const reply = { id: `r_${Date.now()}`, parent_id, text, author: null, created, reactions: {} };
+      // Persist the version the reply was made at so foldCommentsAtVersion can
+      // scope it — without this the reply record has no `version` and the fold's
+      // `r.version` check falls back to the parent's created_in, so replies were
+      // never hidden on older versions (diverging from the worker).
+      const reply = { id: `r_${Date.now()}`, parent_id, text, version: Number(version) || 1, author: null, created, reactions: {} };
       parent.replies.push(reply);
       writeJson(file, comments);
       return json(res, 200, reply);
@@ -285,6 +307,9 @@ const server = http.createServer(async (req, res) => {
       id: `r_${Date.now()}`,
       parent_id,
       text,
+      // Scope the agent reply to the version it was applied at (falls back to
+      // the request version, then 1) so the fold can hide it on earlier ones.
+      version: Number(applied_in != null ? applied_in : body.version) || 1,
       author: { kind: 'agent', login: 'tdoc-agent', name: 'tdoc-agent', avatar_url: null },
       agent_status: ['applied', 'partial', 'question'].includes(agentStatus) ? agentStatus : null,
       created: new Date().toISOString(),
