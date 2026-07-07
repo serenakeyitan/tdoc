@@ -4,6 +4,32 @@ All notable changes to tdoc are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow the `VERSION`
 file and `.claude-plugin/plugin.json`.
 
+## [0.8.1] - 2026-07-07
+
+Fable code audit of the v0.8.0 pins release (fresh engine, every finding
+adversarially verified; 16 confirmed).
+
+### Fixed
+
+- **Comments/replies could be lost silently.** Posting a comment or reply that
+  the server rejected (any non-401 error, or a network failure) cleared your
+  text as if it had succeeded. It now surfaces the error and keeps your text.
+- **Reactions leaked across versions (local server).** Viewing an older version
+  of a doc showed the agent's resolved emoji (✅/🟡/❓) even where the comment
+  was still open, and replies appeared on versions before they were written.
+  The per-version fold now scopes both correctly, matching the hosted worker.
+- **Anchor-click could fire many times.** Clicking a comment's anchored image /
+  chart could trigger its card repeatedly (a listener stacked up on every
+  refresh). Fixed — one handler, one action.
+- **Pinned card lost its selected state after a refresh** (its highlight and
+  "move anchor" affordance disappeared). Restored.
+
+### Internal
+
+- The v0.8.0 pin layout (clustering, spreading, overflow-fold) now has unit
+  tests guarding its correctness against future regressions.
+- Small performance and dead-code cleanups in the overlay and worker.
+
 ## [0.8.0] - 2026-06-30
 
 Comment margin redesign: **pins instead of a card stack**, so the right gutter
