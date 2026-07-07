@@ -1449,7 +1449,10 @@ export class CommentsStore {
       // Corrupt stored value → reject the write, preserve the bytes. 409 so the
       // caller knows it's a recoverable conflict, not a transient 500.
       if (e && /corrupt/.test(e.message || '')) {
-        return Response.json({ status: 409, error: 'comments_store_corrupt', message: 'stored comments are corrupt; manual recovery required' });
+        // Mirror the success path's {status, body} shape — the caller reads
+        // res.body, so a flat {error} here would reach the client as an empty
+        // 409 body and the reason would be silently lost.
+        return Response.json({ status: 409, body: { error: 'comments_store_corrupt', message: 'stored comments are corrupt; manual recovery required' } });
       }
       throw e;
     }
@@ -1534,10 +1537,12 @@ export default {
 
       const rawList = await readComments(env, slug);
       ensureMigrated(rawList);
-      // Snapshot the comments AS OF this exported version, then keep the
-      // ones that are still actionable (not deleted, not resolved).
-      const comments = snapshotList(rawList, Number(vStr));
-      const openComments = comments.filter(c => c.status !== 'resolved');
+      // Snapshot the comments AS OF this exported version. snapshotList only
+      // ever yields status 'open' or 'applied' (never 'resolved'), so the old
+      // `!== 'resolved'` filter here was a no-op. We intentionally export ALL
+      // snapshotted comments — including agent-applied ones — so the fork/export
+      // carries the full resolution history, not just still-open items.
+      const openComments = snapshotList(rawList, Number(vStr));
 
       // 1. Build the agent-readable banner.
       const reactionsText = (rs) => {
@@ -1758,7 +1763,7 @@ export default {
       const target = authList.find(c => c.id === id);
       if (!target) return json({ error: 'not_found' }, { status: 404 });
       if (!canMutate(target, s, env)) return json({ error: 'not_author' }, { status: 403 });
-      const V = Number(version) || target.created_in || 1;
+      const V = coerceBodyVersion(version, target.created_in || 1);
       const res = await mutateComments(env, slug, {
         kind: 'patch_anchor', slug, id, anchor, reset_status: true, version: V, actor: { login: s.login },
       });
@@ -1873,7 +1878,7 @@ export default {
       if (!parent) return json({ error: 'parent_not_found' }, { status: 404 });
 
       const verdict = ['applied', 'partial', 'question'].includes(agentStatus) ? agentStatus : null;
-      const V = Number(applied_in) || parent.created_in || 1;
+      const V = coerceBodyVersion(applied_in, parent.created_in || 1);
       const now = new Date().toISOString();
       const replyId = `r_${Date.now()}_${rand(4)}`;
 
