@@ -1429,12 +1429,23 @@
       const submitReply = async () => {
         const text = replyTa.value.trim();
         if (!text) return;
-        const r = await fetch('/api/comments', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, parent_id: comment.id, text, version })
-        });
+        let r;
+        try {
+          r = await fetch('/api/comments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slug, parent_id: comment.id, text, version })
+          });
+        } catch (e) {
+          alert('Could not post reply: network error'); // keep the text — don't clear
+          return;
+        }
         if (r.status === 401) { startDeviceFlow(); return; }
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          alert('Could not post reply: ' + (err.error || err.message || `HTTP ${r.status}`));
+          return; // preserve the typed reply so it isn't silently lost
+        }
         replyTa.value = '';
         replyForm.classList.remove('open');
         await refreshComments();
@@ -1610,7 +1621,7 @@
       return;
     }
     // Wide mode: render PINS, not a card stack. Each comment becomes a pin at
-    // its Y; pins within CLUSTER_GAP px merge into one count badge. The floating
+    // its Y; pins within SAME_LINE_GAP px merge into one count badge. The floating
     // card (hover/click) is positioned separately by openFloatingCard().
     renderPins();
     // Keep any currently-open floating card glued to its pin on scroll/resize.
@@ -1628,10 +1639,15 @@
   const SAME_LINE_GAP = 12;          // px: true co-location threshold
   const PIN_MIN_GAP = PIN_SIZE + 4;  // 32px: min spacing between spread pins
 
-  function renderPins() {
-    const geo = gutterGeometry();
-    // Y-sorted list of placeable comments.
-    const rows = state.activeComments.map(c => commentY(c, geo)).filter(Boolean);
+  // PURE layout core (steps 0-2), extracted so it's unit-testable without a DOM
+  // (see test/pins-layout.test.js). Takes Y-positioned rows [{y, el, elTop,
+  // elHeight, c}], the gutter geometry {articleTop, articleHeight}, and the
+  // spacing constants; returns the placed clusters [{y, items:[row,...]}].
+  // MUTATES row.y (same-element spread) — callers pass rows they own.
+  // Invariant: no placed cluster's y exceeds articleTop+articleHeight once at
+  // least one cluster is placed (the overflow tail folds into the last pin).
+  function layoutPins(rows, geo, consts) {
+    const { PIN_SIZE, PIN_MIN_GAP, SAME_LINE_GAP } = consts;
 
     // 0) Spread comments that share the SAME element anchor down that element's
     //    height. Element anchors all resolve to the element's TOP edge, so N
@@ -1645,7 +1661,7 @@
       if (!byEl.has(r.el)) byEl.set(r.el, []);
       byEl.get(r.el).push(r);
     }
-    for (const [el, group] of byEl) {
+    for (const [, group] of byEl) {
       if (group.length < 2) continue;
       const top = group[0].elTop, h = group[0].elHeight || 0;
       const usable = Math.max(0, h - PIN_SIZE);
@@ -1678,7 +1694,7 @@
     const placed = [];
     let prevY = -Infinity;
     for (const cl of clusters) {
-      let y = Math.max(cl.y, prevY + PIN_MIN_GAP);
+      const y = Math.max(cl.y, prevY + PIN_MIN_GAP);
       if (y > bottomLimit && placed.length) {
         // No room: merge this cluster's items into the last placed pin (overflow).
         const tail = placed[placed.length - 1];
@@ -1689,6 +1705,14 @@
       placed.push(cl);
       prevY = y;
     }
+    return placed;
+  }
+
+  function renderPins() {
+    const geo = gutterGeometry();
+    // Y-sorted list of placeable comments.
+    const rows = state.activeComments.map(c => commentY(c, geo)).filter(Boolean);
+    const placed = layoutPins(rows, geo, { PIN_SIZE, PIN_MIN_GAP, SAME_LINE_GAP });
 
     // 3) Reconcile pin elements: stable pin per cluster keyed by member ids.
     const seen = new Set();
@@ -1769,8 +1793,8 @@
   function positionFloatingCard(id) {
     const card = state.cardEls.get(id);
     if (!card) return;
-    const row = commentY(state.activeComments.find(c => c.id === id), gutterGeometry());
     const geo = gutterGeometry();
+    const row = commentY(state.activeComments.find(c => c.id === id), geo);
     let y = row ? row.y : geo.articleTop;
     card.style.left = geo.cardLeft + 'px';
     // Flip up if the card would run past the bottom of the viewport.
@@ -1943,7 +1967,6 @@
     const repos = () => positionOutlineAround(outline, el);
     repos();
     outline._reposition = repos;
-    outline._targetEl = el;
     outline.style.pointerEvents = 'none';
     return { el: outline, targetEl: el };
   }
@@ -2036,7 +2059,19 @@
       } else if (kind === 'element') {
         const out = outlineElement(comment);
         if (out) {
-          out.targetEl.addEventListener('click', (e) => { e.stopPropagation(); setActiveComment(comment.id); });
+          // Bind the click handler ONCE per target element. targetEl is a stable
+          // live artifact (matched by data-tdoc-aid), so re-adding an anonymous
+          // listener every refresh leaked handlers and made one click fire
+          // setActiveComment N times. Store the current comment id on the element
+          // and let a single bound handler read it.
+          out.targetEl.dataset.tdocAnchorComment = comment.id;
+          if (!out.targetEl._tdocAnchorClickBound) {
+            out.targetEl._tdocAnchorClickBound = true;
+            out.targetEl.addEventListener('click', (e) => {
+              const cid = e.currentTarget.dataset.tdocAnchorComment;
+              if (cid) { e.stopPropagation(); setActiveComment(cid); }
+            });
+          }
           if (out.targetEl.style) out.targetEl.style.cursor = 'pointer';
           state.anchorMarks.set(comment.id, { kind: 'element', el: out.el, targetEl: out.targetEl });
         }
@@ -2053,9 +2088,11 @@
       // and we're in wide (pins) mode. Runs after repositionCards so the pin
       // elements exist to mark active.
       if (keepPinnedId && !state.narrow && state.cardEls.has(keepPinnedId)) {
-        state.pinnedId = keepPinnedId;
-        showCard(keepPinnedId);
-        markPinActive(keepPinnedId, true);
+        // Use setActiveComment (not the manual pin/show/mark trio) so the
+        // card's .active class, anchor highlight, activeId, AND the pin state
+        // are all re-established together. The manual version desynced activeId
+        // and lost the card's .active state (+ the "move anchor" affordance).
+        setActiveComment(keepPinnedId);
       }
     });
   }
@@ -2417,11 +2454,22 @@
             // Fingerprint is the legacy fallback for any pre-aid docs.
             fingerprint: anchor._el ? elementFingerprint(anchor._el) : null,
             fallback };
-      const r = await fetch('/api/comments', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug, version, anchor: sendAnchor, text })
-      });
+      let r;
+      try {
+        r = await fetch('/api/comments', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug, version, anchor: sendAnchor, text })
+        });
+      } catch (e) {
+        alert('Could not post comment: network error'); // keep popup + text
+        return;
+      }
       if (r.status === 401) { closePopup(); startDeviceFlow(); return; }
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        alert('Could not post comment: ' + (err.error || err.message || `HTTP ${r.status}`));
+        return; // leave the popup + typed text so the comment isn't lost
+      }
       await r.json().catch(() => null);
       closePopup();
       await refreshComments();

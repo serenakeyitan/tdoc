@@ -25,6 +25,7 @@ const OFFLINE = [
   'no-drift.test.js',         // duplicated-helper drift guard
   'coverage.test.js',         // migration, bundle inlining, pull-merge, rich fold
   'overlay-pure.test.js',     // overlay pure helpers (escape/normalize/prefix)
+  'pins-layout.test.js',      // v0.8.0 pins clustering/spread/overflow-fold core
   'comment-upload.test.js',   // local→worker comment merge (non-destructive)
   'comment-ops.test.js',      // #34 DO-serialized mutation ops
   'p3-hardening.test.js',     // #33 safeParseList + escapeHtml
