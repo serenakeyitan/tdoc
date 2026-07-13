@@ -4,6 +4,23 @@ All notable changes to tdoc are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow the `VERSION`
 file and `.claude-plugin/plugin.json`.
 
+## [Unreleased]
+
+### Added — Vercel as a second publish target
+
+`/tdoc publish --platform vercel <slug>` deploys the same worker to a Vercel
+Function instead of a Cloudflare Worker. The bundled worker runs unmodified;
+only the storage bindings are swapped (`vercel/lib/`): docs go to Vercel Blob,
+metadata + comments go to Upstash Redis (Vercel Marketplace). `tdoc-pull` and
+`tdoc-unpublish` resolve the API base from the configured platform. The
+platform is chosen once, on the first publish, and persisted in
+`~/.tdoc/published.json`; existing Cloudflare users are unaffected (default
+unchanged). Known differences on Vercel — no per-doc comment-write
+serialization (the worker's documented KV fallback is used instead of a
+Durable Object) and a ~4.5 MB per-doc upload cap — are documented in
+`vercel/README.md`. Shims are covered by a new offline suite
+(`test/vercel-shim.test.js`).
+
 ## [0.8.1] - 2026-07-07
 
 Fable code audit of the v0.8.0 pins release (fresh engine, every finding

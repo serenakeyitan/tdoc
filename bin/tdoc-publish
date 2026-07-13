@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# tdoc-publish — first-time setup + upload doc to user's Cloudflare Worker.
+# tdoc-publish — first-time setup + upload doc to the user's own hosting.
 #
-# Usage: tdoc-publish <slug>
+# Usage: tdoc-publish [--platform cloudflare|vercel] <slug>
 #
-# First run:
+# Two publish targets share one flow (the worker code and the /api/upload
+# contract are identical on both):
+#   cloudflare (default) — wrangler deploy to a Worker + R2 + KV
+#   vercel               — vercel deploy of the vercel/ template + Blob + Upstash KV
+# The platform is chosen ONCE, on the first publish (flag or TDOC_PLATFORM
+# env), then persisted in ~/.tdoc/published.json and read from there.
+#
+# First run (cloudflare):
 #   1. Verify wrangler installed + logged in
 #   2. Create R2 bucket, KV namespace
 #   3. Generate TDOC_UPLOAD_TOKEN, set as Worker secret
@@ -11,15 +18,28 @@
 #   5. Deploy Worker
 #   6. Save config to ~/.tdoc/published.json
 #
+# First run (vercel): see first_time_setup_vercel below.
+#
 # Subsequent runs:
 #   Just upload the requested slug via /api/upload.
 
 set -euo pipefail
 
-SLUG="${1:-}"
+usage() { echo "usage: tdoc-publish [--platform cloudflare|vercel] <slug>" >&2; exit 1; }
+
+SLUG=""
+PLATFORM_FLAG="${TDOC_PLATFORM:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --platform)   PLATFORM_FLAG="${2:-}"; [ -n "$PLATFORM_FLAG" ] || usage; shift 2 ;;
+    --platform=*) PLATFORM_FLAG="${1#--platform=}"; [ -n "$PLATFORM_FLAG" ] || usage; shift ;;
+    # Anything else is treated as the slug — including dash-leading junk,
+    # which the kebab-case validator below rejects with a precise message.
+    *)  [ -z "$SLUG" ] || usage; SLUG="$1"; shift ;;
+  esac
+done
 if [ -z "$SLUG" ]; then
-  echo "usage: tdoc-publish <slug>" >&2
-  exit 1
+  usage
 fi
 # Validate the slug BEFORE it becomes a filesystem path or a URL query value.
 # Same kebab-case rule tdoc-new enforces. Without this a `..` slug escapes
@@ -36,6 +56,11 @@ DOC_DIR="$TDOC_DIR/$SLUG"
 CONFIG_DIR="$HOME/.tdoc"
 CONFIG_FILE="$CONFIG_DIR/published.json"
 WORKER_DIR="$SKILL_DIR/worker"
+# Vercel deploys run from a work dir OUTSIDE the skill checkout so the
+# `vercel` CLI's .vercel/ project link and the generated bundle never dirty
+# the skill install (mirrors how wrangler.toml is generated, but vercel also
+# writes a link dir, so we isolate the whole app).
+VERCEL_APP_DIR="$CONFIG_DIR/vercel-app"
 
 mkdir -p "$CONFIG_DIR"
 
@@ -134,11 +159,20 @@ EOF
   exit 1
 }
 
-# Deps
-if ! command -v wrangler >/dev/null 2>&1; then
-  fail_with_agent_prompt "wrangler is not installed" \
-    "Install Cloudflare wrangler globally so tdoc can publish: run 'npm i -g wrangler' (or 'pnpm add -g wrangler'). After it's installed, run '/tdoc publish $SLUG' again."
-fi
+# Deps. Platform CLIs (wrangler / vercel) are checked inside their platform
+# branches — only jq + node are needed on every path.
+require_wrangler() {
+  if ! command -v wrangler >/dev/null 2>&1; then
+    fail_with_agent_prompt "wrangler is not installed" \
+      "Install Cloudflare wrangler globally so tdoc can publish: run 'npm i -g wrangler' (or 'pnpm add -g wrangler'). After it's installed, run '/tdoc publish $SLUG' again."
+  fi
+}
+require_vercel() {
+  if ! command -v vercel >/dev/null 2>&1; then
+    fail_with_agent_prompt "the vercel CLI is not installed" \
+      "Install the Vercel CLI globally so tdoc can publish: run 'npm i -g vercel' (or 'pnpm add -g vercel'). After it's installed, run '/tdoc publish $SLUG' again."
+  fi
+}
 if ! command -v jq >/dev/null 2>&1; then
   fail_with_agent_prompt "jq is not installed" \
     "Install jq so tdoc can build its publish payload. On macOS: 'brew install jq'. On Debian/Ubuntu: 'sudo apt-get install -y jq'. Then run '/tdoc publish $SLUG' again."
@@ -154,9 +188,12 @@ if [ ! -d "$DOC_DIR" ]; then
 fi
 
 # --- bundle overlay.js into worker source ---
+# Writes _worker.bundled.js into $1 (defaults to the wrangler worker dir; the
+# vercel path passes its own app dir).
 bundle_worker() {
-  local out="$WORKER_DIR/_worker.bundled.js"
-  node -e '
+  local out_dir="${1:-$WORKER_DIR}"
+  local out="$out_dir/_worker.bundled.js"
+  OUT_DIR="$out_dir" node -e '
     const fs = require("fs");
     const path = require("path");
     const skill = process.env.SKILL_DIR;
@@ -171,13 +208,14 @@ bundle_worker() {
       console.error("bundle: failed to find OVERLAY_JS placeholder");
       process.exit(1);
     }
-    fs.writeFileSync(path.join(skill, "worker/_worker.bundled.js"), replaced);
+    fs.writeFileSync(path.join(process.env.OUT_DIR, "_worker.bundled.js"), replaced);
   '
   echo "bundled: $out"
 }
 
 first_time_setup() {
-  echo "[tdoc] first-time publish setup"
+  echo "[tdoc] first-time publish setup (cloudflare)"
+  require_wrangler
 
   # 1. wrangler login (idempotent — does nothing if already logged in)
   echo "[tdoc] checking wrangler auth..."
@@ -328,61 +366,238 @@ first_time_setup() {
   fi
 }
 
-if [ ! -f "$CONFIG_FILE" ]; then
-  SKILL_DIR="$SKILL_DIR" first_time_setup
-fi
+# ---- vercel platform ----
 
-SUBDOMAIN="$(jq -r .subdomain "$CONFIG_FILE")"
-TOKEN="$(jq -r .upload_token "$CONFIG_FILE")"
-WORKER_NAME="$(jq -r .worker "$CONFIG_FILE")"
-# Validate the config rather than letting a missing field become the literal
-# string "null" → "https://null.null.workers.dev" + "Bearer null". A corrupt or
-# partial published.json should fail loudly, not publish to a bogus host.
-for _f in SUBDOMAIN:subdomain TOKEN:upload_token WORKER_NAME:worker; do
-  _var="${_f%%:*}"; _key="${_f##*:}"; _val="$(eval "printf '%s' \"\$$_var\"")"
-  if [ -z "$_val" ] || [ "$_val" = "null" ]; then
-    echo "[tdoc] $CONFIG_FILE is missing or has a null '$_key'. Delete it and re-run /tdoc publish to re-setup." >&2
+# Assemble the deployable app at $VERCEL_APP_DIR: copy the vercel/ template
+# from the skill checkout, then bundle the worker (with overlay inlined) into
+# it. Idempotent; run before every deploy so template + worker edits ship.
+sync_vercel_app() {
+  if [ ! -d "$SKILL_DIR/vercel/api" ]; then
+    echo "[tdoc] $SKILL_DIR/vercel is missing — re-install/update the tdoc skill." >&2
     exit 1
   fi
-done
-PUBLIC_HOST="$(jq -r '.public_host // empty' "$CONFIG_FILE")"
-CUSTOM_DOMAIN="$(jq -r '.custom_domain // empty' "$CONFIG_FILE")"
-# Fallback for configs created before the domain choice was added
-if [ -z "$PUBLIC_HOST" ]; then PUBLIC_HOST="${SUBDOMAIN}.workers.dev"; fi
-# Upload always hits the workers.dev URL (custom domain binding may not be active yet);
-# the public-facing link we show the user is PUBLIC_HOST.
-UPLOAD_BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
-PUBLIC_BASE="https://${PUBLIC_HOST}"
+  mkdir -p "$VERCEL_APP_DIR/api" "$VERCEL_APP_DIR/lib"
+  cp "$SKILL_DIR/vercel/api/"*.js "$VERCEL_APP_DIR/api/"
+  cp "$SKILL_DIR/vercel/lib/"*.js "$VERCEL_APP_DIR/lib/"
+  cp "$SKILL_DIR/vercel/vercel.json" "$SKILL_DIR/vercel/package.json" "$VERCEL_APP_DIR/"
+  SKILL_DIR="$SKILL_DIR" bundle_worker "$VERCEL_APP_DIR"
+}
 
-# --- redeploy worker if overlay.js / worker.js is newer than the bundled file ---
-# Skipped via TDOC_SKIP_WORKER_DEPLOY=1 (useful for batch uploads in tests).
-BUNDLED="$WORKER_DIR/_worker.bundled.js"
-if [ "${TDOC_SKIP_WORKER_DEPLOY:-0}" != "1" ]; then
-  if [ ! -f "$BUNDLED" ] \
-    || [ "$SKILL_DIR/server/overlay.js" -nt "$BUNDLED" ] \
-    || [ "$SKILL_DIR/worker/worker.js" -nt "$BUNDLED" ]; then
-    echo "[tdoc] worker code changed locally — redeploying..."
-    # Backfill TDOC_OWNER into an existing wrangler.toml that predates the
-    # owner-only catalog feature, so redeploys don't lose the setting.
-    if [ -f "$WORKER_DIR/wrangler.toml" ] \
-      && ! grep -q '^TDOC_OWNER' "$WORKER_DIR/wrangler.toml"; then
-      _ol=""
-      command -v gh >/dev/null 2>&1 && _ol="$(gh api user --jq .login 2>/dev/null || true)"
-      if grep -q '^\[vars\]' "$WORKER_DIR/wrangler.toml"; then
-        # insert right after the [vars] header
-        awk -v ol="$_ol" '
-          {print}
-          /^\[vars\]/ && !done {print "TDOC_OWNER = \"" ol "\""; done=1}
-        ' "$WORKER_DIR/wrangler.toml" > "$WORKER_DIR/wrangler.toml.tmp" \
-          && mv "$WORKER_DIR/wrangler.toml.tmp" "$WORKER_DIR/wrangler.toml"
-      else
-        printf '\n[vars]\nTDOC_OWNER = "%s"\n' "$_ol" >> "$WORKER_DIR/wrangler.toml"
-      fi
-      [ -n "$_ol" ] && echo "[tdoc] backfilled TDOC_OWNER=$_ol into wrangler.toml" \
-        || echo "[tdoc] TDOC_OWNER left empty (catalog stays private)."
+# Deploy $VERCEL_APP_DIR to production. Prints the deployment URL on stdout
+# (the vercel CLI prints exactly that; its progress goes to stderr).
+vercel_deploy_prod() {
+  local out
+  out="$( (cd "$VERCEL_APP_DIR" && vercel deploy --prod --yes) | tail -n1 )" || {
+    echo "[tdoc] vercel deploy failed (see output above)." >&2; return 1; }
+  case "$out" in
+    https://*) printf '%s' "$out" ;;
+    *) echo "[tdoc] vercel deploy did not return a deployment URL (got: $out)" >&2; return 1 ;;
+  esac
+}
+
+first_time_setup_vercel() {
+  echo "[tdoc] first-time publish setup (vercel)"
+  require_vercel
+
+  # 1. vercel login (idempotent — whoami succeeds when already logged in)
+  echo "[tdoc] checking vercel auth..."
+  if ! vercel whoami >/dev/null 2>&1; then
+    echo "[tdoc] running vercel login (browser will open)..."
+    vercel login
+  fi
+
+  # 2. assemble the app dir + link/create the project
+  sync_vercel_app
+  echo "[tdoc] linking Vercel project 'tdoc'..."
+  if ! (cd "$VERCEL_APP_DIR" && vercel link --yes --project tdoc >/dev/null); then
+    fail_with_agent_prompt "could not link/create the Vercel project" \
+      "Run 'cd $VERCEL_APP_DIR && vercel link --yes --project tdoc' and resolve whatever the CLI reports (usually a scope/team choice: add '--scope <team>'). Then run '/tdoc publish $SLUG' again."
+  fi
+
+  # 3. storage must be connected BEFORE the first deploy — the function reads
+  #    BLOB_READ_WRITE_TOKEN + KV/UPSTASH env vars that Vercel injects when a
+  #    store is connected to the project. Both are dashboard clicks (like
+  #    enabling R2 on the cloudflare path), so we hand the user an agent
+  #    prompt instead of failing cryptically at runtime.
+  local envs
+  envs="$( (cd "$VERCEL_APP_DIR" && vercel env ls production 2>/dev/null) || true )"
+  if ! printf '%s' "$envs" | grep -q 'BLOB_READ_WRITE_TOKEN'; then
+    fail_with_agent_prompt "no Vercel Blob store is connected to project 'tdoc'" \
+      "tdoc stores published docs in Vercel Blob. Open https://vercel.com/dashboard → project 'tdoc' → Storage tab → Create Database → Blob → create a store (any name) and CONNECT it to the project (all environments). It's free tier. After the user says done, run '/tdoc publish $SLUG' again."
+  fi
+  if ! printf '%s' "$envs" | grep -Eq 'KV_REST_API_URL|UPSTASH_REDIS_REST_URL'; then
+    fail_with_agent_prompt "no Redis/KV store is connected to project 'tdoc'" \
+      "tdoc stores doc metadata + comments in a Redis-compatible KV. Open https://vercel.com/dashboard → project 'tdoc' → Storage tab → Create Database → Upstash for Redis (Marketplace) → create the free store and CONNECT it to the project (all environments). After the user says done, run '/tdoc publish $SLUG' again."
+  fi
+
+  # 4. upload token → env var (rm first so re-setup after a lost config works)
+  local token
+  token="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+  echo "[tdoc] setting TDOC_UPLOAD_TOKEN env..."
+  (cd "$VERCEL_APP_DIR" && vercel env rm TDOC_UPLOAD_TOKEN production --yes >/dev/null 2>&1 || true)
+  (cd "$VERCEL_APP_DIR" && printf '%s' "$token" | vercel env add TDOC_UPLOAD_TOKEN production >/dev/null)
+
+  # 5. owner login for the private /me catalog (same semantics as cloudflare:
+  #    empty = catalog fully private, link-only docs)
+  local owner_login=""
+  if command -v gh >/dev/null 2>&1; then
+    owner_login="$(gh api user --jq .login 2>/dev/null || true)"
+  fi
+  if [ -n "$owner_login" ]; then
+    echo "[tdoc] worker owner (will see 'My docs'): $owner_login"
+    (cd "$VERCEL_APP_DIR" && vercel env rm TDOC_OWNER production --yes >/dev/null 2>&1 || true)
+    (cd "$VERCEL_APP_DIR" && printf '%s' "$owner_login" | vercel env add TDOC_OWNER production >/dev/null)
+  else
+    echo "[tdoc] no GitHub login detected — doc catalog stays private (link-only)."
+  fi
+
+  # 6. deploy + smoke-check
+  echo "[tdoc] deploying to Vercel..."
+  local deploy_url
+  deploy_url="$(vercel_deploy_prod)" || exit 1
+  local ping
+  ping="$(curl -sS --connect-timeout 10 --max-time 30 "$deploy_url/api/ping" 2>/dev/null || true)"
+  if ! printf '%s' "$ping" | grep -q '"ok"'; then
+    fail_with_agent_prompt "the deployed function does not answer /api/ping" \
+      "The tdoc Vercel deployment at $deploy_url is not healthy. Run 'cd $VERCEL_APP_DIR && vercel logs $deploy_url' to see the error (most often the Blob/KV store is connected to the wrong environment — it must include Production). Fix and run '/tdoc publish $SLUG' again."
+  fi
+
+  # 7. prefer the stable per-scope alias over the per-deployment URL for the
+  #    links we show. `<project>-<scope>.vercel.app` is reserved to the scope
+  #    by Vercel, so probing it can't adopt someone else's deployment.
+  local scope public_host
+  scope="$(vercel whoami 2>/dev/null | tail -n1 | tr -d '[:space:]')"
+  public_host="${deploy_url#https://}"
+  if [ -n "$scope" ]; then
+    local alias_ping
+    alias_ping="$(curl -sS --connect-timeout 10 --max-time 30 "https://tdoc-${scope}.vercel.app/api/ping" 2>/dev/null || true)"
+    if printf '%s' "$alias_ping" | grep -q '"ok"'; then
+      public_host="tdoc-${scope}.vercel.app"
     fi
-    SKILL_DIR="$SKILL_DIR" bundle_worker
-    (cd "$WORKER_DIR" && wrangler deploy)
+  fi
+
+  # 8. save config. 0600 from the start (umask 077) — it holds the token.
+  (
+    umask 077
+    jq -n \
+      --arg tok "$token" \
+      --arg base "$deploy_url" \
+      --arg host "$public_host" \
+      '{platform:"vercel", upload_token:$tok, base:$base, public_host:$host, created: now | todate}' \
+      > "$CONFIG_FILE"
+  )
+  chmod 600 "$CONFIG_FILE"
+  echo "[tdoc] setup done. tdoc is live at: https://${public_host}"
+}
+
+if [ ! -f "$CONFIG_FILE" ]; then
+  case "${PLATFORM_FLAG:-cloudflare}" in
+    cloudflare) SKILL_DIR="$SKILL_DIR" first_time_setup ;;
+    vercel)     SKILL_DIR="$SKILL_DIR" first_time_setup_vercel ;;
+    *) echo "[tdoc] unknown platform '${PLATFORM_FLAG}' — use 'cloudflare' or 'vercel'." >&2; exit 1 ;;
+  esac
+fi
+
+# The platform is whatever the config says from here on. A conflicting
+# --platform flag is ignored loudly rather than half-migrating state.
+PLATFORM="$(jq -r '.platform // "cloudflare"' "$CONFIG_FILE")"
+if [ -n "$PLATFORM_FLAG" ] && [ "$PLATFORM_FLAG" != "$PLATFORM" ]; then
+  echo "[tdoc] already set up for '$PLATFORM' — ignoring '--platform $PLATFORM_FLAG'. To switch platforms, delete $CONFIG_FILE and publish again." >&2
+fi
+
+TOKEN="$(jq -r .upload_token "$CONFIG_FILE")"
+
+if [ "$PLATFORM" = "vercel" ]; then
+  BASE="$(jq -r '.base // empty' "$CONFIG_FILE")"
+  # Validate like the cloudflare branch below: a corrupt or partial
+  # published.json must fail loudly, not publish to "null".
+  for _f in TOKEN:upload_token BASE:base; do
+    _var="${_f%%:*}"; _key="${_f##*:}"; _val="$(eval "printf '%s' \"\$$_var\"")"
+    if [ -z "$_val" ] || [ "$_val" = "null" ]; then
+      echo "[tdoc] $CONFIG_FILE is missing or has a null '$_key'. Delete it and re-run /tdoc publish to re-setup." >&2
+      exit 1
+    fi
+  done
+  PUBLIC_HOST="$(jq -r '.public_host // empty' "$CONFIG_FILE")"
+  CUSTOM_DOMAIN=""
+  [ -n "$PUBLIC_HOST" ] || PUBLIC_HOST="${BASE#https://}"
+
+  # --- redeploy if worker/overlay/template is newer than the bundled file ---
+  # Skipped via TDOC_SKIP_WORKER_DEPLOY=1 (useful for batch uploads in tests).
+  BUNDLED="$VERCEL_APP_DIR/_worker.bundled.js"
+  if [ "${TDOC_SKIP_WORKER_DEPLOY:-0}" != "1" ]; then
+    if [ ! -f "$BUNDLED" ] \
+      || [ "$SKILL_DIR/server/overlay.js" -nt "$BUNDLED" ] \
+      || [ "$SKILL_DIR/worker/worker.js" -nt "$BUNDLED" ] \
+      || [ -n "$(find "$SKILL_DIR/vercel" -type f -newer "$BUNDLED" 2>/dev/null | head -1)" ]; then
+      require_vercel
+      echo "[tdoc] worker code changed locally — redeploying to Vercel..."
+      sync_vercel_app
+      NEW_BASE="$(vercel_deploy_prod)" || exit 1
+      if [ "$NEW_BASE" != "$BASE" ]; then
+        # Persist the fresh deployment URL as the upload base. Old deployment
+        # URLs keep serving, so previously shared links stay live either way.
+        jq --arg base "$NEW_BASE" '.base = $base' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
+          && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE" && chmod 600 "$CONFIG_FILE"
+        BASE="$NEW_BASE"
+      fi
+    fi
+  fi
+  UPLOAD_BASE="$BASE"
+  PUBLIC_BASE="https://${PUBLIC_HOST}"
+else
+  SUBDOMAIN="$(jq -r .subdomain "$CONFIG_FILE")"
+  WORKER_NAME="$(jq -r .worker "$CONFIG_FILE")"
+  # Validate the config rather than letting a missing field become the literal
+  # string "null" → "https://null.null.workers.dev" + "Bearer null". A corrupt or
+  # partial published.json should fail loudly, not publish to a bogus host.
+  for _f in SUBDOMAIN:subdomain TOKEN:upload_token WORKER_NAME:worker; do
+    _var="${_f%%:*}"; _key="${_f##*:}"; _val="$(eval "printf '%s' \"\$$_var\"")"
+    if [ -z "$_val" ] || [ "$_val" = "null" ]; then
+      echo "[tdoc] $CONFIG_FILE is missing or has a null '$_key'. Delete it and re-run /tdoc publish to re-setup." >&2
+      exit 1
+    fi
+  done
+  PUBLIC_HOST="$(jq -r '.public_host // empty' "$CONFIG_FILE")"
+  CUSTOM_DOMAIN="$(jq -r '.custom_domain // empty' "$CONFIG_FILE")"
+  # Fallback for configs created before the domain choice was added
+  if [ -z "$PUBLIC_HOST" ]; then PUBLIC_HOST="${SUBDOMAIN}.workers.dev"; fi
+  # Upload always hits the workers.dev URL (custom domain binding may not be active yet);
+  # the public-facing link we show the user is PUBLIC_HOST.
+  UPLOAD_BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
+  PUBLIC_BASE="https://${PUBLIC_HOST}"
+
+  # --- redeploy worker if overlay.js / worker.js is newer than the bundled file ---
+  # Skipped via TDOC_SKIP_WORKER_DEPLOY=1 (useful for batch uploads in tests).
+  BUNDLED="$WORKER_DIR/_worker.bundled.js"
+  if [ "${TDOC_SKIP_WORKER_DEPLOY:-0}" != "1" ]; then
+    if [ ! -f "$BUNDLED" ] \
+      || [ "$SKILL_DIR/server/overlay.js" -nt "$BUNDLED" ] \
+      || [ "$SKILL_DIR/worker/worker.js" -nt "$BUNDLED" ]; then
+      require_wrangler
+      echo "[tdoc] worker code changed locally — redeploying..."
+      # Backfill TDOC_OWNER into an existing wrangler.toml that predates the
+      # owner-only catalog feature, so redeploys don't lose the setting.
+      if [ -f "$WORKER_DIR/wrangler.toml" ] \
+        && ! grep -q '^TDOC_OWNER' "$WORKER_DIR/wrangler.toml"; then
+        _ol=""
+        command -v gh >/dev/null 2>&1 && _ol="$(gh api user --jq .login 2>/dev/null || true)"
+        if grep -q '^\[vars\]' "$WORKER_DIR/wrangler.toml"; then
+          # insert right after the [vars] header
+          awk -v ol="$_ol" '
+            {print}
+            /^\[vars\]/ && !done {print "TDOC_OWNER = \"" ol "\""; done=1}
+          ' "$WORKER_DIR/wrangler.toml" > "$WORKER_DIR/wrangler.toml.tmp" \
+            && mv "$WORKER_DIR/wrangler.toml.tmp" "$WORKER_DIR/wrangler.toml"
+        else
+          printf '\n[vars]\nTDOC_OWNER = "%s"\n' "$_ol" >> "$WORKER_DIR/wrangler.toml"
+        fi
+        [ -n "$_ol" ] && echo "[tdoc] backfilled TDOC_OWNER=$_ol into wrangler.toml" \
+          || echo "[tdoc] TDOC_OWNER left empty (catalog stays private)."
+      fi
+      SKILL_DIR="$SKILL_DIR" bundle_worker
+      (cd "$WORKER_DIR" && wrangler deploy)
+    fi
   fi
 fi
 

@@ -11,6 +11,12 @@ worker/wrangler.toml
 # Wrangler local cache (created by `wrangler deploy`) — never commit
 worker/.wrangler/
 
+# Vercel local artifacts (project link + generated bundle) — the real deploy
+# runs from ~/.tdoc/vercel-app, but guard against a stray `vercel` run here
+vercel/.vercel/
+vercel/_worker.bundled.js
+vercel/node_modules/
+
 # Editor / OS junk
 .DS_Store
 .vscode/
