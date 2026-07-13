@@ -30,6 +30,7 @@ const OFFLINE = [
   'comment-ops.test.js',      // #34 DO-serialized mutation ops
   'p3-hardening.test.js',     // #33 safeParseList + escapeHtml
   'stampaids.test.js',        // aid-stamp regex hardening (equivalence + edges)
+  'vercel-shim.test.js',      // vercel storage shims (KV/R2 contract, rewrite URL)
   'api.test.js',              // hermetic: spawns its own server in a temp dir
 ];
 

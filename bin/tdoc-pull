@@ -30,9 +30,20 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 if ! command -v jq >/dev/null 2>&1; then echo "needs jq" >&2; exit 1; fi
 
-SUBDOMAIN="$(jq -r .subdomain "$CONFIG_FILE")"
-WORKER_NAME="$(jq -r .worker "$CONFIG_FILE")"
-BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
+# Resolve the API base for the configured platform: vercel configs store the
+# deployment URL directly in `.base`; cloudflare configs derive workers.dev.
+PLATFORM="$(jq -r '.platform // "cloudflare"' "$CONFIG_FILE")"
+if [ "$PLATFORM" = "vercel" ]; then
+  BASE="$(jq -r '.base // empty' "$CONFIG_FILE")"
+  if [ -z "$BASE" ] || [ "$BASE" = "null" ]; then
+    echo "[tdoc] $CONFIG_FILE has no '.base' — delete it and re-run /tdoc publish to re-setup." >&2
+    exit 1
+  fi
+else
+  SUBDOMAIN="$(jq -r .subdomain "$CONFIG_FILE")"
+  WORKER_NAME="$(jq -r .worker "$CONFIG_FILE")"
+  BASE="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
+fi
 
 OUT="$TDOC_DIR/$SLUG/comments.json"
 mkdir -p "$(dirname "$OUT")"

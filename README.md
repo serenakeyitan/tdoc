@@ -65,7 +65,7 @@ What is *not* yet first-class on Codex: native slash-command registration (`/tdo
 |---|---|
 | `/tdoc new <prompt>` | Generate a new doc + open locally |
 | `/tdoc edit <slug>` | New version from open comments; replies on each with ✅/🟡/❓ status |
-| `/tdoc publish <slug>` | Deploy to your Cloudflare Worker, get a public URL |
+| `/tdoc publish <slug>` | Deploy to your Cloudflare Worker (or Vercel, `--platform vercel`), get a public URL |
 | `/tdoc pull <slug>` | Sync comments from the published doc back to local |
 | `/tdoc fork <slug>` | Copy a doc to a new slug |
 | `/tdoc unpublish <slug>` | Remove a published doc from your Worker |
@@ -76,7 +76,22 @@ What is *not* yet first-class on Codex: native slash-command registration (`/tdo
 
 ## Cost
 
-**$0 for normal use.** Cloudflare Workers + R2 + KV all have generous free tiers that personal usage will never come close to. You own your account; nobody else (including the maintainer) sees your traffic or pays your bills.
+**$0 for normal use.** Cloudflare Workers + R2 + KV all have generous free tiers that personal usage will never come close to. The same goes for the Vercel target (Functions + Blob + Upstash Redis free tiers). You own your account; nobody else (including the maintainer) sees your traffic or pays your bills.
+
+## Hosting targets
+
+Publishing deploys the **same worker code** to a host you own; pick one on your
+first publish and it sticks (saved in `~/.tdoc/published.json`):
+
+- **Cloudflare (default)** — Worker + R2 + KV, with a Durable Object
+  serializing concurrent comment writes. The most battle-tested target.
+- **Vercel** — `/tdoc publish --platform vercel <slug>` deploys a catch-all
+  Vercel Function backed by Vercel Blob (docs) and Upstash Redis (metadata +
+  comments, from the Vercel Marketplace). Same URLs, same commenting, same
+  GitHub sign-in. Two caveats vs. Cloudflare: concurrent comment writes are
+  not serialized (no Durable Object equivalent), and uploads are capped at
+  ~4.5 MB per doc by Vercel's request limit. Details in
+  [vercel/README.md](vercel/README.md).
 
 ## How comments work
 
@@ -109,9 +124,10 @@ This is the "edit history" half of the Google-Docs feeling: nothing you write �
 ## Requirements
 
 - Node 18+
-- `wrangler` (for publishing)
 - `jq` (for publishing)
-- A free Cloudflare account with R2 enabled
+- For publishing, ONE of:
+  - `wrangler` + a free Cloudflare account with R2 enabled (default), or
+  - `vercel` CLI + a free Vercel account (`/tdoc publish --platform vercel <slug>`)
 
 `/tdoc onboard` checks and installs these for you.
 
