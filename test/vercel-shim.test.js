@@ -64,6 +64,14 @@ function fakeUpstash(replies) {
     eq(f.calls[1].args, ['DEL', 'comments:s']);
   });
 
+  await t('kv.put forwards expirationTtl as SET ... EX (sessions must expire)', async () => {
+    const f = fakeUpstash([{ result: 'OK' }]);
+    const kv = createKvStore({ url: 'https://kv.example', token: 't', fetchImpl: f.fetchImpl });
+    // Mirrors the worker's session write: env.META.put(key, val, {expirationTtl: 30d}).
+    await kv.put('session:sid', '{"login":"x"}', { expirationTtl: 60 * 60 * 24 * 30 });
+    eq(f.calls[0].args, ['SET', 'session:sid', '{"login":"x"}', 'EX', String(60 * 60 * 24 * 30)]);
+  });
+
   await t('kv.list pages through SCAN with the worker loop contract', async () => {
     const f = fakeUpstash([
       { result: ['42', ['meta:a', 'meta:b']] },
