@@ -48,9 +48,16 @@ function createKvStore({ url, token, fetchImpl }) {
       const v = await cmd('GET', key);
       return v == null ? null : String(v);
     },
-    // KV.put(key, value). The worker only ever writes strings (JSON).
-    async put(key, value) {
-      await cmd('SET', key, value);
+    // KV.put(key, value, {expirationTtl}). The worker writes strings (JSON),
+    // and for session records passes expirationTtl (30d) relying on the store
+    // to auto-expire them. Cloudflare KV honors that; forward it to Redis as
+    // `SET key value EX <seconds>` so Vercel sessions expire too — otherwise
+    // session:* keys live forever (unbounded growth + no server-side session
+    // expiry). Upstash REST supports the trailing EX arg.
+    async put(key, value, opts = {}) {
+      const ttl = opts && opts.expirationTtl;
+      if (ttl) await cmd('SET', key, value, 'EX', String(ttl));
+      else await cmd('SET', key, value);
     },
     // KV.delete(key). Deleting a missing key is a no-op, same as KV.
     async delete(key) {
