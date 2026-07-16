@@ -4,7 +4,7 @@ All notable changes to tdoc are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow the `VERSION`
 file and `.claude-plugin/plugin.json`.
 
-## [Unreleased]
+## [0.9.0] - 2026-07-13
 
 ### Added — Vercel as a second publish target
 
@@ -19,7 +19,14 @@ unchanged). Known differences on Vercel — no per-doc comment-write
 serialization (the worker's documented KV fallback is used instead of a
 Durable Object) and a ~4.5 MB per-doc upload cap — are documented in
 `vercel/README.md`. Shims are covered by a new offline suite
-(`test/vercel-shim.test.js`).
+(`test/vercel-shim.test.js`). Contributed by @julies-claw (#76).
+
+### Fixed
+
+- **Vercel sessions now expire.** The Upstash KV shim dropped the worker's
+  `expirationTtl`, so on Vercel login sessions (`session:*`) never expired —
+  unbounded key growth and no server-side session expiry. The shim now forwards
+  the TTL as `SET … EX`, matching Cloudflare KV (#77).
 
 ## [0.8.1] - 2026-07-07
 
