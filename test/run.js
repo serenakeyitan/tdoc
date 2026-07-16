@@ -43,8 +43,18 @@ const GATED = [
   'ui.test.js',          // playwright
 ];
 
+// The browser-only subset of GATED: needs playwright + a headless browser but
+// NO Cloudflare secrets (they boot server.js against the committed fixture), so
+// they run in CI on a free ubuntu-latest runner. See the `browser` job in
+// .github/workflows/test.yml. onboarding/publish stay out — they need Cloudflare.
+const BROWSER = [
+  'responsive.test.js',
+  'ui.test.js',
+];
+
 const runAll = process.argv.includes('--all');
-const files = runAll ? [...OFFLINE, ...GATED] : OFFLINE;
+const runBrowser = process.argv.includes('--browser');
+const files = runBrowser ? BROWSER : (runAll ? [...OFFLINE, ...GATED] : OFFLINE);
 
 let failed = [];
 for (const f of files) {
@@ -60,4 +70,4 @@ if (failed.length) {
   process.exit(1);
 }
 console.log(`PASS — all ${files.length} suite(s) green`);
-if (!runAll) console.log(`(gated suites not run: ${GATED.join(', ')} — use --all with a server/playwright)`);
+if (!runAll && !runBrowser) console.log(`(gated suites not run: ${GATED.join(', ')} — use --all with a server/playwright, or --browser for just the playwright suites)`);
