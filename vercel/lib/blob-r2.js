@@ -17,6 +17,12 @@
 // rather than head(pathname) because the SDK's head/del historically accepted
 // only full blob URLs; list-by-prefix + exact match works on every SDK
 // version and also hands us the URL that get()/delete() need.
+//
+// The exact `pathname === key` match (not just the prefix) is what stops
+// `docs/a/v1/index.html` from resolving to `docs/a/v11/index.html`'s blob.
+// limit:10 is enough because keys are full pathnames — the only blobs sharing
+// this prefix would be longer paths under it, which tdoc never writes. If that
+// ever changes, page the list instead of raising the limit.
 async function resolveBlob(sdk, key) {
   const r = await sdk.list({ prefix: key, limit: 10 });
   return (r.blobs || []).find(b => b.pathname === key) || null;
