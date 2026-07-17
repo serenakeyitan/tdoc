@@ -76,4 +76,3 @@ function createDocsStore(sdk) {
 }
 
 export { createDocsStore, resolveBlob };
-
